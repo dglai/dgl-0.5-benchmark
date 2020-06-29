@@ -47,7 +47,6 @@ def bench_sddmm(g, ctx):
                 print('hidden size: {}, avg time: {}'.format(
                     n_hid, avg_time))
             except:
-                print(err)
                 print('hidden size: {}, OOM'.format(n_hid))
 
 if __name__ == '__main__':
