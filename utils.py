@@ -34,7 +34,7 @@ def dgl_to_pyg_graph(g):
     N = g.number_of_nodes()
     E = g.number_of_edges()
     adj_t = SparseTensor(
-        row=eidx[0], col=eidx[1], value=th.arange(E), sparse_sizes=(N, N)).t()
+        row=eidx[0], col=eidx[1], value=th.ones(E).float(), sparse_sizes=(N, N)).t()
     return eidx, adj_t
 
 def get_graph(dataset):

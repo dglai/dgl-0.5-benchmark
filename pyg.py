@@ -9,17 +9,20 @@ def bench_spmm(g, ctx):
     adj_t = g[1].to(ctx)
     print("SPMM\n----------------------------")
     with th.no_grad():
-        for n_hid in [1, 2, 4, 8]:
-            nfeat = th.rand(adj_t.size(1), n_hid, device=ctx)
-            accum_time = 0
-            for n_times in range(10):
-                with th_op_time() as timer:
-                    out = matmul(adj_t, nfeat, reduce='sum')
-                if n_times >= n_cold_start:
-                    accum_time += timer.time
-            avg_time = accum_time / (n_times - n_cold_start)
-            print('hidden size: {}, avg time: {}'.format(
-                n_hid, avg_time))
+        for n_hid in [1, 2, 4, 8, 16, 32, 64, 128]:
+            try:
+                nfeat = th.rand(adj_t.size(1), n_hid, device=ctx)
+                accum_time = 0
+                for n_times in range(10):
+                    with th_op_time() as timer:
+                        out = matmul(adj_t, nfeat, reduce='max')
+                    if n_times >= n_cold_start:
+                        accum_time += timer.time
+                avg_time = accum_time / (n_times - n_cold_start)
+                print('hidden size: {}, avg time: {}'.format(
+                    n_hid, avg_time))
+            except:
+                print('hidden size: {}, OOM'.format(n_hid))
 
 def bench_sddmm(g, ctx):
     eidx = g[0]
