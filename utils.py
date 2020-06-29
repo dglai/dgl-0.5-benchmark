@@ -5,6 +5,16 @@ import dgl.data
 from ogb.nodeproppred import DglNodePropPredDataset
 from torch_sparse import SparseTensor
 
+binary_op_dict = {
+    'add': lambda x, y: x + y,
+    'sub': lambda x, y: x - y,
+    'mul': lambda x, y: x * y,
+    'div': lambda x, y: x / y,
+    'dot': lambda x, y: (x * y).sum(-1),
+    'copy_u': lambda x, y: x,
+    'copy_e': lambda x, y: y
+}
+
 class th_op_time(object):
     def __enter__(self):
         if th.cuda.is_available():
