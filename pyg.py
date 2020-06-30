@@ -35,6 +35,7 @@ def bench_spmm(csvfile, g, ctx, binary_op, reduce_op):
                 writer.writerow([str(n_hid), 'OOM'])
 
 def bench_sddmm(csvfile, g, ctx, op):
+    writer = csv.writer(csvfile)
     adj_t = g[1].to(ctx)
     row, col = g[0]
     row = row.to(ctx)
@@ -56,8 +57,10 @@ def bench_sddmm(csvfile, g, ctx, op):
                 avg_time = accum_time / (n_times - n_cold_start)
                 print('hidden size: {}, avg time: {}'.format(
                     n_hid, avg_time))
+                writer.writerow([str(n_hid), str(avg_time)])
             except:
                 print('hidden size: {}, OOM'.format(n_hid))
+                writer.writerow([str(n_hid), 'OOM'])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Benchmark DGL kernels")
@@ -79,5 +82,6 @@ if __name__ == '__main__':
         with open('_'.join(['pyg', dataset, 'spmm', ctx_str, args.spmm_binary, args.spmm_reduce]) + '.csv', 'w') as csvfile:
             bench_spmm(csvfile, g, ctx, args.spmm_binary, args.spmm_reduce)
         # SDDMM
+        if ctx_str == 'cpu': continue  # sddmm out of mem on cpu will result in termination of the program.
         with open('_'.join(['pyg', dataset, 'sddmm', ctx_str, args.sddmm_binary]) + '.csv', 'w') as csvfile:
             bench_sddmm(csvfile, g, ctx, args.sddmm_binary)

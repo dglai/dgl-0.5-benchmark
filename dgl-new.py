@@ -72,5 +72,6 @@ if __name__ == '__main__':
         with open('_'.join(['new', dataset, 'spmm', ctx_str, args.spmm_binary, args.spmm_reduce]) + '.csv', 'w') as csvfile:
             bench_spmm(csvfile, g, ctx, args.spmm_binary, args.spmm_reduce)
         # SDDMM
+        if ctx_str == 'cpu': continue  # sddmm out of mem on cpu will result in termination of the program.
         with open('_'.join(['new', dataset, 'sddmm', ctx_str, args.sddmm_binary]) + '.csv', 'w') as csvfile:
             bench_sddmm(csvfile, g, ctx, args.sddmm_binary)
