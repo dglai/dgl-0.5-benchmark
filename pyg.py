@@ -2,10 +2,12 @@ import torch as th
 from torch_sparse import matmul, SparseTensor
 from utils import th_op_time, get_pyg_graph, binary_op_dict
 import argparse
+import csv
 
 n_cold_start = 2
 
-def bench_spmm(g, ctx, binary_op, reduce_op):
+def bench_spmm(csvfile, g, ctx, binary_op, reduce_op):
+    writer = csv.writer(csvfile)
     assert binary_op == 'copy_u'
     adj_t = g[1].to(ctx)
     ptr = adj_t.storage.rowptr().to(ctx)
@@ -27,10 +29,12 @@ def bench_spmm(g, ctx, binary_op, reduce_op):
                 avg_time = accum_time / (n_times - n_cold_start)
                 print('hidden size: {}, avg time: {}'.format(
                     n_hid, avg_time))
+                writer.writerow([str(n_hid), str(avg_time)])
             except:
                 print('hidden size: {}, OOM'.format(n_hid))
+                writer.writerow([str(n_hid), 'OOM'])
 
-def bench_sddmm(g, ctx, op):
+def bench_sddmm(csvfile, g, ctx, op):
     adj_t = g[1].to(ctx)
     row, col = g[0]
     row = row.to(ctx)
@@ -66,11 +70,14 @@ if __name__ == '__main__':
         ctx = th.device('cpu')
     else:
         ctx = th.device(int(args.gpu))
+    ctx_str = 'cpu' if args.gpu == '-1' else 'gpu'
 
-    for dataset in ['arxiv', 'proteins']:
+    for dataset in ['reddit', 'arxiv', 'proteins']:
         g = get_pyg_graph(dataset)
         print(dataset)
         # SPMM
-        bench_spmm(g, ctx, args.spmm_binary, args.spmm_reduce)
+        with open('_'.join(['pyg', dataset, 'spmm', ctx_str, args.spmm_binary, args.spmm_reduce]) + '.csv', 'w') as csvfile:
+            bench_spmm(csvfile, g, ctx, args.spmm_binary, args.spmm_reduce)
         # SDDMM
-        bench_sddmm(g, ctx, args.sddmm_binary)
+        with open('_'.join(['pyg', dataset, 'sddmm', ctx_str, args.sddmm_binary]) + '.csv', 'w') as csvfile:
+            bench_sddmm(csvfile, g, ctx, args.sddmm_binary)

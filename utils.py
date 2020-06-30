@@ -29,7 +29,7 @@ class th_op_time(object):
         if th.cuda.is_available():
             self.end_event.record()
             th.cuda.synchronize()  # Wait for the events to be recorded!
-            self.time = self.start_event.elapsed_time(self.end_event)
+            self.time = self.start_event.elapsed_time(self.end_event) / 1e3
         else:
             self.time = time.time() - self.tic
 

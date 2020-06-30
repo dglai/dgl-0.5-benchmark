@@ -1,13 +1,15 @@
 import dgl
 import dgl.sparse
 import torch as th
+import csv
 from utils import th_op_time, get_graph
 
 import argparse
 
 n_cold_start = 2
 
-def bench_spmm(g, ctx, binary_op, reduce_op):
+def bench_spmm(csvfile, g, ctx, binary_op, reduce_op):
+    writer = csv.writer(csvfile)
     print("SPMM\n----------------------------")
     with th.no_grad():
         for n_hid in [1, 2, 4, 8, 16, 32, 64, 128]:
@@ -23,10 +25,13 @@ def bench_spmm(g, ctx, binary_op, reduce_op):
                 avg_time = accum_time / (n_times - n_cold_start)
                 print('hidden size: {}, avg time: {}'.format(
                     n_hid, avg_time))
+                writer.writerow([str(n_hid), str(avg_time)])
             except:
                 print('hidden size: {}, OOM'.format(n_hid))
+                writer.writerow([str(n_hid), 'OOM'])
 
-def bench_sddmm(g, ctx, op):
+def bench_sddmm(csvfile, g, ctx, op):
+    writer = csv.writer(csvfile)
     print("SDDMM\n----------------------------")
     with th.no_grad():
         for n_hid in [1, 2, 4, 8, 16, 32, 64, 128]:
@@ -42,8 +47,10 @@ def bench_sddmm(g, ctx, op):
                 avg_time = accum_time / (n_times - n_cold_start)
                 print('hidden size: {}, avg time: {}'.format(
                     n_hid, avg_time))
+                writer.writerow([str(n_hid), str(avg_time)])
             except:
                 print('hidden size: {}, OOM'.format(n_hid))
+                writer.writerow([str(n_hid), 'OOM'])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Benchmark DGL kernels")
@@ -56,11 +63,14 @@ if __name__ == '__main__':
         ctx = th.device('cpu')
     else:
         ctx = th.device(int(args.gpu))
+    ctx_str = 'cpu' if args.gpu == '-1' else 'gpu'
 
-    for dataset in ['arxiv', 'proteins']:
+    for dataset in ['reddit', 'arxiv', 'proteins']:
         g = get_graph(dataset)
         print(g)
         # SPMM
-        bench_spmm(g, ctx, args.spmm_binary, args.spmm_reduce)
+        with open('_'.join(['new', dataset, 'spmm', ctx_str, args.spmm_binary, args.spmm_reduce]) + '.csv', 'w') as csvfile:
+            bench_spmm(csvfile, g, ctx, args.spmm_binary, args.spmm_reduce)
         # SDDMM
-        bench_sddmm(g, ctx, args.sddmm_binary)
+        with open('_'.join(['new', dataset, 'sddmm', ctx_str, args.sddmm_binary]) + '.csv', 'w') as csvfile:
+            bench_sddmm(csvfile, g, ctx, args.sddmm_binary)
