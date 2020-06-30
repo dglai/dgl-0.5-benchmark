@@ -10,6 +10,7 @@ from tvm.contrib.dlpack import to_pytorch_func
 import numpy as np
 
 n_cold_start = 2
+num_runs = 10
 binary_op_map = {
     'add': lambda x,y : x+y,
     'sub': lambda x,y : x-y,
@@ -54,7 +55,8 @@ def bench_sddmm(g, f, ctx, th_ctx):
             f_input += [tvm_lhs_off, tvm_rhs_off]
         if binary_op == 'dot':
             f_input.append(reduce_size)
-        tvm_out = tvm.nd.array(np.zeros(shape=(adj_row_indices.shape[0], out_len), dtype=feat_type), ctx=ctx)
+        out = th.zeros((adj_row_indices.shape[0], out_len), dtype=th_dtype_mapping[feat_type], device=th_ctx)
+        tvm_out = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(out))
         f_input.append(tvm_out)
         # verify result is correct
         f.get_function(f_name)(*f_input)
@@ -68,19 +70,28 @@ def bench_sddmm(g, f, ctx, th_ctx):
             np_result = np_result.cpu()
         np.testing.assert_allclose(np_result.reshape(np_result.shape[0], out_len), tvm_out.asnumpy(), rtol=1e-4, atol=1e-4)
         # warmup
-        # for _ in range(num_warmup):
-            # f.get_function(f_name)(*f_input)
+        for _ in range(num_warmup):
+            f.get_function(f_name)(*f_input)
         # measure average time
-        # timer = f.time_evaluator(f_name, ctx=ctx, number=num_runs)
-        # tcost = timer(*f_input).mean
-        # print(tcost)
+        timer = f.time_evaluator(f_name, ctx=ctx, number=num_runs)
+        tcost = timer(*f_input).mean
+        print('binary_op: {}\tsrc_feat_shape: {}\tdst_feat_shape: {}\telpased time: {:.3e}s'
+              .format(binary_op, src_feat_shape, dst_feat_shape, tcost))
         # return tcost
-    lhs_shapes = [(1, 3), (5, 3), (1, 2, 3)]
-    rhs_shapes = [(5, 1), (1, 3), (2, 1, 3)]
+    lhs_shapes = [(1, 3), (5, 3), (1, 3, 3)]
+    rhs_shapes = [(5, 1), (1, 3), (3, 1, 3)]
     for lhs_shape, rhs_shape in zip(lhs_shapes, rhs_shapes):
-        measure_time('add', lhs_shape, rhs_shape, 'float32', n_cold_start, 10)
+        measure_time('add', lhs_shape, rhs_shape, 'float32', n_cold_start, num_runs)
         if lhs_shape[-1] == rhs_shape[-1]:
-            measure_time('dot', lhs_shape, rhs_shape, 'float32', n_cold_start, 10)
+            measure_time('dot', lhs_shape, rhs_shape, 'float32', n_cold_start, num_runs)
+    flatten_lhs_shapes = [(15,), (27,)]
+    flatten_rhs_shapes = [(15,), (27,)]
+    for lhs_shape, rhs_shape in zip(flatten_lhs_shapes, flatten_rhs_shapes):
+        measure_time('add', lhs_shape, rhs_shape, 'float32', n_cold_start, num_runs)
+    dot_lhs_shapes = [(5, 3), (9, 3)]
+    dot_rhs_shapes = [(5, 3), (9, 3)]
+    for lhs_shape, rhs_shape in zip(dot_lhs_shapes, dot_rhs_shapes):
+        measure_time('dot', lhs_shape, rhs_shape, 'float32', n_cold_start, num_runs)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Benchmark DGL kernels")
@@ -94,7 +105,7 @@ if __name__ == '__main__':
         ctx = th.device(int(args.gpu))
         tvm_ctx = tvm.gpu(int(args.gpu))
         module = gsddmm.build_all('cuda')
-    for dataset in ['arxiv', 'proteins']:
+    for dataset in ['arxiv']:
         g = get_graph(dataset)
         print(g)
         # SPMM
