@@ -3,7 +3,7 @@ import dgl
 import time
 import dgl.data
 from ogb.nodeproppred import DglNodePropPredDataset
-from torch_sparse import SparseTensor
+# from torch_sparse import SparseTensor
 
 class th_op_time(object):
     def __enter__(self):

@@ -1,0 +1,13 @@
+in get attr: labels
+in get attr: graph_data
+Graph(num_nodes=132534, num_edges=79122504,
+      ndata_schemes={}
+      edata_schemes={})
+SDDMM
+----------------------------
+binary_op: add	src_feat_shape: (1,)	dst_feat_shape: (1,)	elpased time: 1.658e-03s
+binary_op: add	src_feat_shape: (2,)	dst_feat_shape: (2,)	elpased time: 2.656e-03s
+binary_op: add	src_feat_shape: (4,)	dst_feat_shape: (4,)	elpased time: 5.309e-03s
+binary_op: add	src_feat_shape: (8,)	dst_feat_shape: (8,)	elpased time: 1.793e-02s
+binary_op: add	src_feat_shape: (16,)	dst_feat_shape: (16,)	elpased time: 5.368e-02s
+binary_op: add	src_feat_shape: (32,)	dst_feat_shape: (32,)	elpased time: 3.370e-01s
