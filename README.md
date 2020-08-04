@@ -1,1 +1,1 @@
-# gnn-kernel-benchmark
+# gnn-0.5-benchmark
