@@ -22,10 +22,10 @@ class GCN(torch.nn.Module):
         super(GCN, self).__init__()
 
         self.convs = torch.nn.ModuleList()
-        self.convs.append(nn.GATConv(in_channels, hidden_channels, 4))
+        self.convs.append(nn.GATConv(in_channels, hidden_channels, 1))
         for _ in range(num_layers - 2):
-            self.convs.append(nn.GATConv(hidden_channels * 4, hidden_channels, 4))
-        self.convs.append(nn.GATConv(hidden_channels * 4, out_channels, 1))
+            self.convs.append(nn.GATConv(hidden_channels * 1, hidden_channels, 1))
+        self.convs.append(nn.GATConv(hidden_channels * 1, out_channels, 1))
         #self.convs.append(nn.GraphConv(in_channels, hidden_channels, norm='none'))
         #for _ in range(num_layers - 2):
         #    self.convs.append(nn.GraphConv(hidden_channels, hidden_channels, norm='none'))
@@ -119,45 +119,27 @@ def train(model, predictor, loader, optimizer, device):
         g_data, neg_g = data
         print(g_data.number_of_nodes(), g_data.number_of_edges())
         tmp_time = time()
-        g_data._graph.get_unitgraph(0, dgl.ndarray.gpu(0))
-        neg_g._graph.get_unitgraph(0, dgl.ndarray.gpu(0))
+        g_data = g_data.int().to(device)
+        neg_g = neg_g.int().to(device)
 
-        feat = g_data.ndata['feat'].to(device)
-        #pos_src, pos_dst = g_data.edges()
-        #neg_src, neg_dst = neg_g.edges()
-        #pos_src = pos_src.to(device)
-        #pos_dst = pos_dst.to(device)
-        #neg_src = neg_src.to(device)
-        #neg_dst = neg_dst.to(device)
+        feat = g_data.ndata['feat']
         to_device_time += (time() - tmp_time)
 
         tmp_time = time()
         h = model(g_data, feat)
-        #ff_time += (time() - tmp_time)
-
-        #tmp_time = time()
-        #pos_out = predictor(h[src], h[dst])
         tmp_time = time()
         score = predict1(g_data, h)
-        #g_data.edata['score'] = (h[pos_src] * h[pos_dst]).sum(1)
 
         pos_loss = -torch.nn.functional.logsigmoid(score).mean()
-        #pos_loss.item()
         part_1 += time() - tmp_time
-        #print(g_data.number_of_nodes(), g_data.number_of_edges())
 
         tmp_time = time()
         score = predict2(neg_g, h)
-        #neg_g.edata['score'] = (h[neg_src] * h[neg_dst]).sum(1)
 
-        #neg_out = predictor(h[src], h[dst_neg])
         neg_loss = -torch.nn.functional.logsigmoid(-score).mean()
-        #neg_loss.item()
         pred_loss_time += (time() - tmp_time)
-        #print(neg_g.number_of_nodes(), neg_g.number_of_edges())
 
         loss = pos_loss + neg_loss
-        #loss.item()
 
         tmp_time = time()
         loss.backward()
@@ -185,7 +167,7 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, device):
     print('Evaluating full-batch GNN on CPU...')
 
     model.to(torch.device('cpu'))
-
+    data = data.to(torch.device('cpu'))
     h = model(data, data.ndata['feat']).to(device)
 
     print('Finish model forward on CPU. Takes:', time() - tmp_time)
@@ -252,22 +234,16 @@ def main():
     # Manually add self-loop link since GCN will wash out the feature of isolated nodes.
     # We should not handle it manually, but in GraphConv module instead.
     n_nodes = dataset[0].number_of_nodes()
-    dataset[0].readonly(False)
-    dataset[0].add_edges(torch.arange(n_nodes).long(), torch.arange(n_nodes).long())
-    dataset[0].readonly(True)
-    homo_g_data = dgl.to_bidirected(dataset[0])
+    g_data = dgl.add_self_loop(dataset[0])
+    g_data = dgl.to_bidirected(g_data)
 
-    g_data = dgl.as_heterograph(homo_g_data)
     for k in dataset[0].node_attr_schemes().keys():
         g_data.ndata[k] = dataset[0].ndata[k]
     print(g_data.number_of_nodes(), g_data.number_of_edges())
 
-    g_data.in_degree(0)
-    g_data.out_degree(0)
-    g_data.find_edges(0)
+    g_data.create_format_()
 
-    # Has to use homo graph since metis transform does not take heterograph
-    cluster_dataset = ClusterIterDataset('ogbl-citation', homo_g_data, args.num_partitions, use_pp=False)
+    cluster_dataset = ClusterIterDataset('ogbl-citation', g_data, args.num_partitions, use_pp=False)
     cluster_iterator = DataLoader(cluster_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers , collate_fn=partial(subgraph_collate_fn, g_data, negs=args.negs))
 
     # We randomly pick some training samples that we want to evaluate on:
