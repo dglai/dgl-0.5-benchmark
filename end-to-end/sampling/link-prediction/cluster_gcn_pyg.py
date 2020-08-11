@@ -17,19 +17,21 @@ import time
 
 
 class GCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout,
+            gnn_type='gcn'):
         super(GCN, self).__init__()
 
         self.convs = torch.nn.ModuleList()
-        self.convs.append(GATConv(in_channels, hidden_channels, 4))
-        for _ in range(num_layers - 2):
-            self.convs.append(GATConv(hidden_channels * 4, hidden_channels, 4))
-        self.convs.append(GATConv(hidden_channels * 4, out_channels, 1))
-        #self.convs.append(GCNConv(in_channels, hidden_channels))
-        #for _ in range(num_layers - 2):
-        #    self.convs.append(GCNConv(hidden_channels, hidden_channels))
-        #self.convs.append(GCNConv(hidden_channels, out_channels))
+        if gnn_type == 'gat':
+            self.convs.append(GATConv(in_channels, hidden_channels, 4))
+            for _ in range(num_layers - 2):
+                self.convs.append(GATConv(hidden_channels * 4, hidden_channels, 4))
+            self.convs.append(GATConv(hidden_channels * 4, out_channels, 1))
+        elif gnn_type == 'gcn':
+            self.convs.append(GCNConv(in_channels, hidden_channels))
+            for _ in range(num_layers - 2):
+                self.convs.append(GCNConv(hidden_channels, hidden_channels))
+            self.convs.append(GCNConv(hidden_channels, out_channels))
 
         self.dropout = dropout
 
@@ -179,6 +181,7 @@ def main():
     parser.add_argument('--eval_steps', type=int, default=10)
     parser.add_argument('--runs', type=int, default=10)
     parser.add_argument('--negs', type=int, default=1)
+    parser.add_argument('--gnn_type', type=str, default='gcn')
     args = parser.parse_args()
     print(args)
 
@@ -207,7 +210,7 @@ def main():
     #}
 
     model = GCN(data.x.size(-1), args.hidden_channels, args.hidden_channels,
-                args.num_layers, args.dropout).to(device)
+            args.num_layers, args.dropout, gnn_type=args.gnn_type).to(device)
     predictor = LinkPredictor(args.hidden_channels, args.hidden_channels, 1,
                               args.num_layers, args.dropout).to(device)
 
