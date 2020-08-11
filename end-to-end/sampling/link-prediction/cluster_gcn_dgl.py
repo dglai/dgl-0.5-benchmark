@@ -17,19 +17,21 @@ from ogb.linkproppred import DglLinkPropPredDataset, Evaluator
 from logger import Logger
 
 class GCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout,
+            gnn_type='gcn'):
         super(GCN, self).__init__()
 
         self.convs = torch.nn.ModuleList()
-        self.convs.append(nn.GATConv(in_channels, hidden_channels, 1))
-        for _ in range(num_layers - 2):
-            self.convs.append(nn.GATConv(hidden_channels * 1, hidden_channels, 1))
-        self.convs.append(nn.GATConv(hidden_channels * 1, out_channels, 1))
-        #self.convs.append(nn.GraphConv(in_channels, hidden_channels, norm='none'))
-        #for _ in range(num_layers - 2):
-        #    self.convs.append(nn.GraphConv(hidden_channels, hidden_channels, norm='none'))
-        #self.convs.append(nn.GraphConv(hidden_channels, out_channels, norm='none'))
+        if gnn_type == 'gat':
+            self.convs.append(nn.GATConv(in_channels, hidden_channels, 1))
+            for _ in range(num_layers - 2):
+                self.convs.append(nn.GATConv(hidden_channels * 1, hidden_channels, 1))
+            self.convs.append(nn.GATConv(hidden_channels * 1, out_channels, 1))
+        elif gnn_type == 'gcn':
+            self.convs.append(nn.GraphConv(in_channels, hidden_channels, norm='none'))
+            for _ in range(num_layers - 2):
+                self.convs.append(nn.GraphConv(hidden_channels, hidden_channels, norm='none'))
+            self.convs.append(nn.GraphConv(hidden_channels, out_channels, norm='none'))
 
         self.dropout = dropout
 
@@ -222,6 +224,7 @@ def main():
     parser.add_argument('--eval_steps', type=int, default=10)
     parser.add_argument('--runs', type=int, default=10)
     parser.add_argument('--negs', type=int, default=1)
+    parser.add_argument('--gnn_type', type=str, default='gcn')
     args = parser.parse_args()
     print(args)
 
@@ -256,7 +259,7 @@ def main():
     #}
 
     model = GCN(g_data.ndata['feat'].size(-1), args.hidden_channels, args.hidden_channels,
-                args.num_layers, args.dropout).to(device)
+                args.num_layers, args.dropout, gnn_type=args.gnn_type).to(device)
     predictor = LinkPredictor(args.hidden_channels, args.hidden_channels, 1,
                               args.num_layers, args.dropout).to(device)
 
