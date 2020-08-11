@@ -2,12 +2,10 @@ import torch as th
 from torch_sparse import matmul, SparseTensor
 from utils import th_op_time, get_pyg_graph, binary_op_dict
 import argparse
-import csv
 
 n_cold_start = 2
 
-def bench_spmm(csvfile, g, ctx, binary_op, reduce_op):
-    writer = csv.writer(csvfile)
+def bench_spmm(g, ctx, binary_op, reduce_op):
     assert binary_op == 'copy_u'
     adj_t = g[1].to(ctx)
     ptr = adj_t.storage.rowptr().to(ctx)
@@ -29,13 +27,10 @@ def bench_spmm(csvfile, g, ctx, binary_op, reduce_op):
                 avg_time = accum_time / (n_times - n_cold_start)
                 print('hidden size: {}, avg time: {}'.format(
                     n_hid, avg_time))
-                writer.writerow([str(n_hid), str(avg_time)])
             except:
                 print('hidden size: {}, OOM'.format(n_hid))
-                writer.writerow([str(n_hid), 'OOM'])
 
-def bench_sddmm(csvfile, g, ctx, op):
-    writer = csv.writer(csvfile)
+def bench_sddmm(g, ctx, op):
     adj_t = g[1].to(ctx)
     row, col = g[0]
     row = row.to(ctx)
@@ -57,10 +52,8 @@ def bench_sddmm(csvfile, g, ctx, op):
                 avg_time = accum_time / (n_times - n_cold_start)
                 print('hidden size: {}, avg time: {}'.format(
                     n_hid, avg_time))
-                writer.writerow([str(n_hid), str(avg_time)])
             except:
                 print('hidden size: {}, OOM'.format(n_hid))
-                writer.writerow([str(n_hid), 'OOM'])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Benchmark DGL kernels")
@@ -79,9 +72,6 @@ if __name__ == '__main__':
         g = get_pyg_graph(dataset)
         print(dataset)
         # SPMM
-        with open('_'.join(['pyg', dataset, 'spmm', ctx_str, args.spmm_binary, args.spmm_reduce]) + '.csv', 'w') as csvfile:
-            bench_spmm(csvfile, g, ctx, args.spmm_binary, args.spmm_reduce)
+        bench_spmm(g, ctx, args.spmm_binary, args.spmm_reduce)
         # SDDMM
-        if ctx_str == 'cpu': continue  # sddmm out of mem on cpu will result in termination of the program.
-        with open('_'.join(['pyg', dataset, 'sddmm', ctx_str, args.sddmm_binary]) + '.csv', 'w') as csvfile:
-            bench_sddmm(csvfile, g, ctx, args.sddmm_binary)
+        bench_sddmm(g, ctx, args.sddmm_binary)
