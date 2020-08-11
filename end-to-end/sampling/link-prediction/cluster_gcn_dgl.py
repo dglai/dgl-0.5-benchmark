@@ -210,8 +210,9 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, device):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='OGBL-Citation (Cluster-GCN)')
+    parser = argparse.ArgumentParser(description='Link prediction (Cluster-GCN)')
     parser.add_argument('--device', type=int, default=0)
+    parser.add_argument('--dataset', type=str, default='ogbl-citation')
     parser.add_argument('--log_steps', type=int, default=1)
     parser.add_argument('--num_partitions', type=int, default=15000)
     parser.add_argument('--num_workers', type=int, default=4)
@@ -231,11 +232,9 @@ def main():
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    dataset = DglLinkPropPredDataset(name='ogbl-citation')
-    #split_edge = dataset.get_edge_split()
+    dataset = DglLinkPropPredDataset(name=args.dataset)
 
     # Manually add self-loop link since GCN will wash out the feature of isolated nodes.
-    # We should not handle it manually, but in GraphConv module instead.
     n_nodes = dataset[0].number_of_nodes()
     g_data = dgl.add_self_loop(dataset[0])
     g_data = dgl.to_bidirected(g_data)
@@ -246,24 +245,15 @@ def main():
 
     g_data.create_format_()
 
-    cluster_dataset = ClusterIterDataset('ogbl-citation', g_data, args.num_partitions, use_pp=False)
+    cluster_dataset = ClusterIterDataset(args.dataset, g_data, args.num_partitions, use_pp=False)
     cluster_iterator = DataLoader(cluster_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers , collate_fn=partial(subgraph_collate_fn, g_data, negs=args.negs))
-
-    # We randomly pick some training samples that we want to evaluate on:
-    torch.manual_seed(12345)
-    #idx = torch.randperm(split_edge['train']['source_node'].numel())[:86596]
-    #split_edge['eval_train'] = {
-    #    'source_node': split_edge['train']['source_node'][idx],
-    #    'target_node': split_edge['train']['target_node'][idx],
-    #    'target_node_neg': split_edge['valid']['target_node_neg'],
-    #}
 
     model = GCN(g_data.ndata['feat'].size(-1), args.hidden_channels, args.hidden_channels,
                 args.num_layers, args.dropout, gnn_type=args.gnn_type).to(device)
     predictor = LinkPredictor(args.hidden_channels, args.hidden_channels, 1,
                               args.num_layers, args.dropout).to(device)
 
-    evaluator = Evaluator(name='ogbl-citation')
+    evaluator = Evaluator(name=args.dataset)
     logger = Logger(args.runs, args)
 
     for run in range(args.runs):
@@ -318,3 +308,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

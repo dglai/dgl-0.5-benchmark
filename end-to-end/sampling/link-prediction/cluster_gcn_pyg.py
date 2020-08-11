@@ -79,7 +79,6 @@ class LinkPredictor(torch.nn.Module):
             lin.reset_parameters()
 
     def forward(self, x_i, x_j):
-        #return torch.einsum('ij,ij->i', x_i, x_j)
         return (x_i * x_j).sum(1)
 
 
@@ -167,8 +166,9 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, device):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='OGBL-Citation (Cluster-GCN)')
+    parser = argparse.ArgumentParser(description='Link Prediction (Cluster-GCN)')
     parser.add_argument('--device', type=int, default=0)
+    parser.add_argument('--dataset', type=str, default='ogbl-citation')
     parser.add_argument('--log_steps', type=int, default=1)
     parser.add_argument('--num_partitions', type=int, default=15000)
     parser.add_argument('--num_workers', type=int, default=4)
@@ -188,8 +188,7 @@ def main():
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    dataset = PygLinkPropPredDataset(name='ogbl-citation')
-    #split_edge = dataset.get_edge_split()
+    dataset = PygLinkPropPredDataset(name=args.dataset)
     data = dataset[0]
     data.edge_index = to_undirected(data.edge_index, data.num_nodes)
     print(data.edge_index.shape, data.num_nodes)
@@ -200,21 +199,12 @@ def main():
     loader = ClusterLoader(cluster_data, batch_size=args.batch_size,
                            shuffle=True, num_workers=args.num_workers)
 
-    # We randomly pick some training samples that we want to evaluate on:
-    torch.manual_seed(12345)
-    #idx = torch.randperm(split_edge['train']['source_node'].numel())[:86596]
-    #split_edge['eval_train'] = {
-    #    'source_node': split_edge['train']['source_node'][idx],
-    #    'target_node': split_edge['train']['target_node'][idx],
-    #    'target_node_neg': split_edge['valid']['target_node_neg'],
-    #}
-
     model = GCN(data.x.size(-1), args.hidden_channels, args.hidden_channels,
             args.num_layers, args.dropout, gnn_type=args.gnn_type).to(device)
     predictor = LinkPredictor(args.hidden_channels, args.hidden_channels, 1,
                               args.num_layers, args.dropout).to(device)
 
-    evaluator = Evaluator(name='ogbl-citation')
+    evaluator = Evaluator(name=args.dataset)
     logger = Logger(args.runs, args)
 
     for run in range(args.runs):
@@ -243,8 +233,8 @@ def main():
                           f'Valid: {valid_mrr:.4f}, '
                           f'Test: {test_mrr:.4f}')
 
-        #logger.print_statistics(run)
-    #logger.print_statistics()
+        logger.print_statistics(run)
+    logger.print_statistics()
 
 
 if __name__ == "__main__":
