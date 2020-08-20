@@ -1,17 +1,19 @@
 import dgl
 import dgl.sparse
+from tvm import topi
 import torch as th
-from utils import th_op_time, get_graph
+from utils import partition_for_spmm
 from featgraph.module import gsddmm, gspmm
-from featgraph.util import calc_bcast, partition_csr
 import argparse
 import tvm
 from tvm.contrib.dlpack import to_pytorch_func
 import numpy as np
-import util
+import time
 
-n_cold_start = 2
-num_runs = 10
+n_cold_start = 0
+num_runs = 1
+num_cores = 8
+cache_size = 45 * 2 ** 20
 binary_op_map = {
     'add': lambda x,y : x+y,
     'sub': lambda x,y : x-y,
@@ -22,178 +24,197 @@ binary_op_map = {
 }
 
 th_dtype_mapping = {
+    'float16': th.float16,
     'float32': th.float32,
-    'float64': th.float64
+    'float64': th.float64,
+    'int32': th.int32,
+    'int64': th.int64
 }
 
-def bench_spmm(g, target, ctx, th_ctx, generic=False):
-    print("SPMM\n----------------------------")
-    adj_scipy_csr = g.adjacency_matrix(scipy_fmt='csr')
-    adj_indptr = adj_scipy_csr.indptr
-    adj_indices = adj_scipy_csr.indices
-    num_rows, num_cols = adj_scipy_csr.shape[0], adj_scipy_csr.shape[1]
-    nnz = adj_indices.shape[0]
-    id_type = str(adj_indptr.dtype)
-    tvm_indptr = tvm.nd.array(adj_indptr, ctx=ctx)
-    tvm_indices = tvm.nd.array(adj_indices, ctx=ctx)
-    def measure_time(binary_op, reduce_op, 
-                     src_feat_shape, dst_feat_shape, feat_type, 
-                     num_warmup, num_runs, verify=False):
-        use_bcast, lhs_len, rhs_len, out_len, _, lhs_off, rhs_off = \
-            calc_bcast(binary_op, np.zeros((1,)+src_feat_shape), np.zeros((1,)+dst_feat_shape))
-        if generic:
-            f = tvm.build(gspmm.gspmm(binary_op, reduce_op, id_type, feat_type,
-                                      use_bcast=use_bcast, target=target), target=target)
+def prod(t):
+    p = 1
+    for x in t:
+        p *= x
+    return p
+
+def measure_time(module, f_input, ctx):
+    print('measurement start')
+    for _ in range(n_cold_start):
+            module(*f_input)
+    timer = module.time_evaluator(module.entry_name, ctx=ctx, number=num_runs)
+    tcost = timer(*f_input).mean
+    print('measurement end')
+    return tcost
+
+def spmm_input(binary_op, reduce_op,
+               src_shape, dst_shape, out_shape,
+               feat_type, id_type, th_ctx):
+    use_src = binary_op != 'copy_rhs'
+    use_dst = binary_op != 'copy_lhs'
+    f_input = []
+    print('preparing input...')
+    if use_src:
+        f_input.append(th.rand(src_shape, dtype=th_dtype_mapping[feat_type], device=th_ctx))
+    if use_dst:
+        f_input.append(th.rand(dst_shape, dtype=th_dtype_mapping[feat_type], device=th_ctx))
+    if reduce_op != 'sum':
+        if use_src:
+            f_input.append(th.zeros(out_shape, dtype=th_dtype_mapping[id_type], device=th_ctx))
+        if use_dst:
+            f_input.append(th.zeros(out_shape, dtype=th_dtype_mapping[id_type], device=th_ctx))
+    out = th.zeros(out_shape, dtype=th_dtype_mapping[feat_type], device=th_ctx)
+    print('done')
+    f_input.append(out)
+    return f_input
+
+def torch_to_tvm(inputs):
+    outputs = []
+    for i in inputs:
+        outputs.append(tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(i)))
+    return outputs
+
+partition1d_graphs = {}
+
+
+def bench_spmm(g, target, ctx, th_ctx, binary_op, reduce_op, 
+                src_feat_shape, dst_feat_shape, feat_type, test_normal=True, test_partition=False):
+    num_rows, num_cols = g.number_of_dst_nodes(), g.number_of_src_nodes()
+    nnz = g.number_of_edges()
+    gidx = g._graph
+    id_type = gidx.dtype
+    print(id_type)
+    out_shape = dgl.sparse.infer_broadcast_shape(binary_op, src_feat_shape, dst_feat_shape)
+    f_input = spmm_input(binary_op, reduce_op,
+                (num_cols,) + src_feat_shape,
+                (nnz,) + dst_feat_shape,
+                (num_rows,) + out_shape,
+                feat_type, id_type, th_ctx)
+    if test_normal:
+        rst = gidx.get_csc_dlpack(0)
+        adj_indptr, adj_indices, edge_mapping = map(lambda x: tvm.nd.from_dlpack(x.to_dlpack()), rst)
+        f = gspmm.spmm(
+                binary_op, reduce_op, nnz, num_rows, num_cols,
+                src_feat_shape, dst_feat_shape, out_shape,
+                id_type, feat_type, use_idx=True,
+                target=target
+            )
+        # if binary_op != 'copy_lhs':
+        #     edge_mapping = th.utils.dlpack.from_dlpack(rst[2].to_dlpack())
+        #     if binary_op == 'copy_rhs':
+        #         f_input[0] = f_input[0][edge_mapping.long()]
+        #     else:
+        #         f_input[1] = f_input[1][edge_mapping.long()]
+        tcost = measure_time(f, [adj_indptr, adj_indices, edge_mapping] + torch_to_tvm(f_input), ctx)
+        print('binary_op: {}\treduce_op:{}\tsrc_feat_shape: {}\tdst_feat_shape: {}\telpased time: {:.3e}s'
+                .format(binary_op, reduce_op, src_feat_shape, dst_feat_shape, tcost))
+    if test_partition:
+        P = partition_for_spmm(num_cols, nnz, 
+            prod(src_feat_shape), prod(dst_feat_shape), prod(out_shape),
+            4, 4, num_cores, cache_size, binary_op, reduce_op != 'sum')
+        if P == 1:
+            print('No partiton needed')
         else:
+            num_feat_partitions = 2
+            num_col_partitions = 4
+            num_cols_per_partition = (num_cols + num_col_partitions - 1) // num_col_partitions
+            key = (id(g), num_col_partitions)
+            if key in partition1d_graphs:
+                rst = partition1d_graphs[key]
+            else:
+                print('start partition vertice of graph in to {} segments'.format(num_col_partitions))
+                start = time.time()
+                rst = dgl.sparse._CAPI_DGLPartition1D(gidx, 0, num_cols_per_partition)
+                print('partition finishes within {}s'.format(time.time() - start))
+                partition1d_graphs[key] = rst
+            adj_indptr, adj_indices, edge_mapping = map(lambda x: tvm.nd.from_dlpack(rst(x).to_dlpack()), [0,1,2])
+            # if binary_op != 'copy_lhs':
+            #     edge_mapping = th.utils.dlpack.from_dlpack(rst(2).to_dlpack())
+            #     print(edge_mapping)
+            #     if binary_op == 'copy_rhs':
+            #         f_input[0] = f_input[0][edge_mapping.long()]
+            #     else:
+            #         f_input[1] = f_input[1][edge_mapping.long()]
             f = gspmm.spmm(
                 binary_op, reduce_op, nnz, num_rows, num_cols,
-                lhs_len, rhs_len, out_len,
-                id_type, feat_type, 
-                use_bcast=use_bcast, target=target
+                src_feat_shape, dst_feat_shape, out_shape,
+                id_type, feat_type, use_idx=False,
+                num_col_partitions=num_col_partitions, 
+                num_feat_partitions=num_feat_partitions,
+                target=target
             )
-        # try:
-        use_src, use_dst = True, True
-        if binary_op == 'copy_u':
-            use_dst = False
-        elif binary_op == 'copy_e':
-            use_src = False
-        f_input = [tvm_indptr, tvm_indices]
-        if use_src:
-            src_feat = th.rand((num_cols, lhs_len), dtype=th_dtype_mapping[feat_type], device=th_ctx)
-            tvm_src_feat = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(src_feat))
-            f_input.append(tvm_src_feat)
-        if use_dst:
-            dst_feat = th.rand((nnz, rhs_len), dtype=th_dtype_mapping[feat_type], device=th_ctx)
-            tvm_dst_feat = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(dst_feat))
-            f_input.append(tvm_dst_feat)
-        if use_bcast:
-            tvm_lhs_off = tvm.nd.array(lhs_off.astype(id_type), ctx=ctx)
-            tvm_rhs_off = tvm.nd.array(rhs_off.astype(id_type), ctx=ctx)
-            f_input += [tvm_lhs_off, tvm_rhs_off]
-        out = th.zeros((num_rows, out_len), dtype=th_dtype_mapping[feat_type], device=th_ctx)
-        tvm_out = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(out))
-        f_input.append(tvm_out)
-        # verify result is correct
-        if verify and binary_op == 'mul' and reduce_op == 'sum' and out_len == 1:
-            f(*f_input)
-            adj_scipy_csr.data = dst_feat.cpu().numpy()
-            np_result = adj_scipy_csr.dot(src_feat.cpu().numpy())
-            np.testing.assert_allclose(np_result, tvm_out.asnumpy(), rtol=1e-4, atol=1e-4)
-        else:
-            # warmup
-            for _ in range(num_warmup):
-                f(*f_input)
-            # measure average time
-            timer = f.time_evaluator(f.entry_name, ctx=ctx, number=num_runs)
-            tcost = timer(*f_input).mean
+            tcost = measure_time(f, [adj_indptr, adj_indices] + torch_to_tvm(f_input), ctx)
             print('binary_op: {}\treduce_op:{}\tsrc_feat_shape: {}\tdst_feat_shape: {}\telpased time: {:.3e}s'
-                .format(binary_op, reduce_op, src_feat_shape, dst_feat_shape, tcost))
-        # except Exception as e:
-        #     print(e)
-    shapes = [(2 ** x,) for x in range(3)]
-    for shape in shapes:
-        measure_time('mul', 'sum', shape, shape, 'float32', n_cold_start, num_runs, verify=True)
-    # for shape in shapes:
-    #     measure_time('copy_u', 'max', shape, shape, 'float32', n_cold_start, num_runs)
+                    .format(binary_op, reduce_op, src_feat_shape, dst_feat_shape, tcost))
+
     
 def bench_sddmm(g, target, ctx, th_ctx, generic=False, 
-                partition=True):
+                num_row_partitions=1, num_col_partitions=1, feat_partition=False):
     print("SDDMM\n----------------------------")
-    if not partition:
-        adj_scipy_coo = g.adjacency_matrix(scipy_fmt='coo')
-        num_rows, num_cols = adj_scipy_coo.shape[0], adj_scipy_coo.shape[1]
-        adj_row_indices = adj_scipy_coo.row
-        adj_col_indices = adj_scipy_coo.col
-        nnz = adj_row_indices.shape[0]
-        id_type = str(adj_row_indices.dtype)
+    num_rows, num_cols = g.number_of_dst_nodes(), g.number_of_src_nodes()
+    nnz = g.number_of_edges()
+    gidx = g._graph
+    id_type = gidx.dtype
+    if num_row_partitions == 1 and num_col_partitions == 1:
+        row, col, _ = map(lambda x: tvm.nd.from_dlpack(x.to_dlpack()), gidx.get_coo_dlpack(0))
     else:
-        adj_scipy_csr = g.adjacency_matrix(scipy_fmt='csr')
-        num_rows, num_cols = adj_scipy_csr.shape[0], adj_scipy_csr.shape[1]
-        nnz = adj_scipy_csr.indices.shape[0]
-        id_type = str(adj_scipy_csr.indices.dtype)
-        adj_row_indices = np.zeros(shape=(nnz,), dtype=id_type)
-        adj_col_indices = np.zeros(shape=(nnz,), dtype=id_type)
-        edge_id = np.arange(1, 1+nnz, dtype=id_type)
-        par_edge_id = np.zeros(shape=(nnz,), dtype=id_type)
-        util.partition_2d(adj_scipy_csr.indptr, adj_scipy_csr.indices, edge_id,
-                       adj_row_indices, adj_col_indices, par_edge_id,
-                       num_rows, num_cols, 32, 32)
-    tvm_row_indices = tvm.nd.array(adj_row_indices, ctx=ctx)
-    tvm_col_indices = tvm.nd.array(adj_col_indices, ctx=ctx)
+        num_rows_per_partition = num_rows // num_row_partitions
+        num_cols_per_partition = num_cols // num_col_partitions
+        print('partition start')
+        start = time.time()
+        rst = dgl.sparse._CAPI_DGLPartition2D(gidx, 0, num_rows_per_partition, num_cols_per_partition)
+        row, col, edge_id = map(lambda x: tvm.nd.from_dlpack(rst(x).to_dlpack()), [0,1,2])
+        print('partition finish within {}s'.format(time.time() - start))
     def measure_time(binary_op, src_feat_shape, dst_feat_shape, 
-                     feat_type, num_warmup, num_runs, verify=False):
-        use_bcast, lhs_len, rhs_len, out_len, reduce_size, lhs_off, rhs_off = \
-            calc_bcast(binary_op, np.zeros((1,)+src_feat_shape), np.zeros((1,)+dst_feat_shape))
+                     feat_type, num_warmup, num_runs):
+        out_shape = dgl.sparse.infer_broadcast_shape(binary_op, src_feat_shape, dst_feat_shape)
+        if feat_partition:
+            num_feat_partitions = topi.util.get_const_int(topi.util.prod(out_shape)) // 32
+        else:
+            num_feat_partitions = 1
         if generic:
-            f = tvm.build(gsddmm.gsddmm(binary_op, id_type, feat_type, 
-                                        use_bcast=use_bcast, target=target), target=target)
+            f = gsddmm.sddmm(binary_op, 0, 0, 0, 
+                             src_feat_shape, dst_feat_shape, out_shape,
+                             id_type, feat_type,
+                             lhs_target=0, rhs_target=2, target=target)
         else:
             f = gsddmm.sddmm(binary_op, nnz, num_rows, num_cols, 
-                             lhs_len, rhs_len, out_len,
+                             src_feat_shape, dst_feat_shape, out_shape,
                              id_type, feat_type, 
-                             reduce_size=reduce_size, target=target)
-        try:
-            f_input = [tvm_row_indices, tvm_col_indices]
-            use_src, use_dst = True, True
-            if binary_op == 'copy_u':
-                use_dst = False
-            elif binary_op == 'copy_v':
-                use_src = False
-            if use_src:
-                src_feat = th.rand((num_rows, lhs_len), dtype=th_dtype_mapping[feat_type], device=th_ctx)
-                tvm_src_feat = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(src_feat))
-                f_input.append(tvm_src_feat)
-            if use_dst:
-                dst_feat = th.rand((num_cols, rhs_len), dtype=th_dtype_mapping[feat_type], device=th_ctx)
-                tvm_dst_feat = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(dst_feat))
-                f_input.append(tvm_dst_feat)
-            if use_bcast:
-                tvm_lhs_off = tvm.nd.array(lhs_off.astype(id_type), ctx=ctx)
-                tvm_rhs_off = tvm.nd.array(rhs_off.astype(id_type), ctx=ctx)
-                f_input += [tvm_lhs_off, tvm_rhs_off]
-            if generic and binary_op == 'dot':
-                f_input.append(reduce_size)
-            out = th.zeros((nnz, out_len), dtype=th_dtype_mapping[feat_type], device=th_ctx)
-            tvm_out = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(out))
-            f_input.append(tvm_out)
-            # verify result is correct
-            if verify:
-                f(*f_input)
-                lhs = src_feat[adj_row_indices]
-                rhs = dst_feat[adj_col_indices]
-                if binary_op != 'dot':
-                    np_result = binary_op_map[binary_op](lhs, rhs)
-                else:
-                    if reduce_size == feat_len:
-                        np_result = (lhs * rhs).sum(axis=-1, keepdims=True)
-                    else:
-                        lhs = lhs.reshape((lhs.shape[0], feat_len // reduce_size, reduce_size))
-                        rhs = rhs.reshape((rhs.shape[0], feat_len // reduce_size, reduce_size))
-                        np_result = (lhs * rhs).sum(axis=-1)
-                if target == 'cuda':
-                    np_result = np_result.cpu()
-                np.testing.assert_allclose(np_result, tvm_out.asnumpy(), rtol=1e-4, atol=1e-4)
-            else:
-                # warmup
-                for _ in range(num_warmup):
-                    f(*f_input)
-                # measure average time
-                timer = f.time_evaluator(f.entry_name, ctx=ctx, number=num_runs)
-                tcost = timer(*f_input).mean
-                print('binary_op: {}\tsrc_feat_shape: {}\tdst_feat_shape: {}\telpased time: {:.3e}s'
-                    .format(binary_op, src_feat_shape, dst_feat_shape, tcost))
-        except:
-            print(out_len, 'OOM')
+                             num_feat_partitions = num_feat_partitions,
+                             lhs_target=0, rhs_target=2, target=target)
+        # try:
+        f_input = [row,  col]
+        src_feat = th.rand((num_rows,) + src_feat_shape, dtype=th_dtype_mapping[feat_type], device=th_ctx)
+        tvm_src_feat = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(src_feat))
+        f_input.append(tvm_src_feat)
+        dst_feat = th.rand((num_cols,) + dst_feat_shape, dtype=th_dtype_mapping[feat_type], device=th_ctx)
+        tvm_dst_feat = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(dst_feat))
+        f_input.append(tvm_dst_feat)
+        out = th.zeros((nnz,) + out_shape, dtype=th_dtype_mapping[feat_type], device=th_ctx)
+        tvm_out = tvm.nd.from_dlpack(th.utils.dlpack.to_dlpack(out))
+        f_input.append(tvm_out)
+        # warmup
+        for _ in range(num_warmup):
+            f(*f_input)
+        # measure average time
+        timer = f.time_evaluator(f.entry_name, ctx=ctx, number=num_runs)
+        tcost = timer(*f_input).mean
+        print('binary_op: {}\tsrc_feat_shape: {}\tdst_feat_shape: {}\telpased time: {:.3e}s'
+            .format(binary_op, src_feat_shape, dst_feat_shape, tcost))
+        # except:
+        #     print(out_shape, 'OOM')
     shapes = [(2 ** x,) for x in range(8)]
     for shape in shapes:
+        measure_time('add', shape, shape, 'float16', n_cold_start, num_runs)
+    for shape in shapes:
         measure_time('add', shape, shape, 'float32', n_cold_start, num_runs)
-    # for shape in shapes:
-    #     measure_time('dot', shape, shape, 'float32', n_cold_start, num_runs)
 
 if __name__ == '__main__':
+    import dgl.backend as F
     parser = argparse.ArgumentParser("Benchmark DGL kernels")
     parser.add_argument('--gpu', '-g', type=str, default='-1')
     args = parser.parse_args()
+    g = dgl.rand_graph(2**16, 2**22)
     if args.gpu == '-1':
         target = 'llvm'
         ctx = th.device('cpu')
@@ -203,11 +224,22 @@ if __name__ == '__main__':
         ctx = th.device(int(args.gpu))
         tvm_ctx = tvm.gpu(int(args.gpu))
     # for dataset in ['arxiv', 'reddit', 'proteins']:
-    for dataset in ['arxiv']:
-        g = get_graph(dataset)
-        print(g)
-        # SPMM
-        bench_spmm(g, target, tvm_ctx, ctx, generic=False)
-        # SDDMM
-        # bench_sddmm(g, target, tvm_ctx, ctx, generic=False, partition=True)
+    # for dataset in ['reddit']:
+    # g = get_graph(dataset)
+    g = g.astype(F.int64).to(ctx)
+    print(g)
+    # SPMM
+    binary_op = 'add'
+    reduce_op = 'sum'
+    feat_type = 'float32'
+    shapes = [(2, 512)]
+    for shape in shapes:
+        bench_spmm(g, target, tvm_ctx, ctx, 
+                binary_op, reduce_op, 
+                shape, shape, feat_type,
+                test_normal=True,
+                test_partition=True)
+    # SDDMM
+    # bench_sddmm(g, target, tvm_ctx, ctx, generic=False, num_row_partitions=1, num_col_partitions=1, feat_partition=False)
+    # bench_sddmm(g, target, tvm_ctx, ctx, generic=False, num_row_partitions=2, num_col_partitions=2, feat_partition=False)
         
