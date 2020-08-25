@@ -16,26 +16,8 @@ from dgl.data import RedditDataset
 import tqdm
 import traceback
 
-#### Neighbor sampler
+from load_graph import load_reddit, load_ogb, inductive_split
 
-class NeighborSampler(object):
-    def __init__(self, g, fanouts):
-        self.g = g
-        self.fanouts = fanouts
-
-    def sample_blocks(self, seeds):
-        seeds = th.LongTensor(np.asarray(seeds))
-        blocks = []
-        for fanout in self.fanouts:
-            # For each seed node, sample ``fanout`` neighbors.
-            frontier = dgl.sampling.sample_neighbors(self.g, seeds, fanout, replace=True)
-            # Then we compact the frontier into a bipartite graph for message passing.
-            block = dgl.to_block(frontier, seeds)
-            # Obtain the seed nodes for next layer.
-            seeds = block.srcdata[dgl.NID]
-
-            blocks.insert(0, block)
-        return blocks
 
 class GAT(nn.Module):
     def __init__(self,
@@ -96,10 +78,19 @@ class GAT(nn.Module):
             else:
                 y = th.zeros(g.number_of_nodes(), self.n_hidden if l != len(self.layers) - 1 else self.n_classes)
 
-            for start in tqdm.trange(0, len(nodes), batch_size):
-                end = start + batch_size
-                batch_nodes = nodes[start:end]
-                block = dgl.to_block(dgl.in_subgraph(g, batch_nodes), batch_nodes)
+            sampler = dgl.dataloading.MultiLayerNeighborSampler([None])
+            dataloader = dgl.dataloading.NodeDataLoader(
+                g,
+                th.arange(g.number_of_nodes()),
+                sampler,
+                batch_size=batch_size,
+                shuffle=True,
+                drop_last=False,
+                num_workers=args.num_workers)
+
+            for input_nodes, output_nodes, blocks in tqdm.tqdm(dataloader):
+                block = blocks[0]
+
                 block = block.int().to(device)
                 input_nodes = block.srcdata[dgl.NID]
 
@@ -111,7 +102,7 @@ class GAT(nn.Module):
                     h = layer(block, (h, h_dst))
                     h = h.mean(1)
                     h = h.log_softmax(dim=-1)
-                y[start:end] = h.cpu()
+                y[output_nodes] = h.cpu()
 
             x = y
         return y
@@ -138,31 +129,30 @@ def evaluate(model, g, inputs, labels, val_mask, batch_size, device):
     model.train()
     return compute_acc(pred[val_mask], labels[val_mask])
 
-def load_subtensor(g, labels, seeds, input_nodes, device):
+def load_subtensor(g, seeds, input_nodes, device):
     """
     Copys features and labels of a set of nodes onto GPU.
     """
     batch_inputs = g.ndata['features'][input_nodes].to(device)
-    batch_labels = labels[seeds].to(device)
+    batch_labels = g.ndata['labels'][seeds].to(device)
     return batch_inputs, batch_labels
 
 #### Entry point
 def run(args, device, data):
     # Unpack data
-    train_mask, val_mask, in_feats, labels, n_classes, g = data
-    train_nid = th.LongTensor(np.nonzero(train_mask)[0])
-    val_nid = th.LongTensor(np.nonzero(val_mask)[0])
-    train_mask = th.BoolTensor(train_mask)
-    val_mask = th.BoolTensor(val_mask)
-
-    # Create sampler
-    sampler = NeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')])
+    in_feats, n_classes, train_g, val_g, test_g = data
+    train_nid = th.nonzero(train_g.ndata['train_mask'], as_tuple=True)[0]
+    val_nid = th.nonzero(val_g.ndata['val_mask'], as_tuple=True)[0]
+    test_nid = th.nonzero(~(test_g.ndata['train_mask'] | test_g.ndata['val_mask']), as_tuple=True)[0]
 
     # Create PyTorch DataLoader for constructing blocks
-    dataloader = DataLoader(
-        dataset=train_nid.numpy(),
+    sampler = dgl.dataloading.MultiLayerNeighborSampler(
+        [int(fanout) for fanout in args.fan_out.split(',')])
+    dataloader = dgl.dataloading.NodeDataLoader(
+        train_g,
+        train_nid,
+        sampler,
         batch_size=args.batch_size,
-        collate_fn=sampler.sample_blocks,
         shuffle=True,
         drop_last=False,
         num_workers=args.num_workers)
@@ -182,17 +172,12 @@ def run(args, device, data):
 
         # Loop over the dataloader to sample the computation dependency graph as a list of
         # blocks.
-        for step, blocks in enumerate(dataloader):
+        for step, (input_nodes, seeds, blocks) in enumerate(dataloader):
             tic_step = time.time()
 
-            # The nodes for input lies at the LHS side of the first block.
-            # The nodes for output lies at the RHS side of the last block.
-            blocks = [block.int().to(device) for block in blocks]
-            input_nodes = blocks[0].srcdata[dgl.NID]
-            seeds = blocks[-1].dstdata[dgl.NID]
-
             # Load the input features as well as output labels
-            batch_inputs, batch_labels = load_subtensor(g, labels, seeds, input_nodes, device)
+            batch_inputs, batch_labels = load_subtensor(train_g, seeds, input_nodes, device)
+            blocks = [block.int().to(device) for block in blocks]
 
             # Compute loss and prediction
             batch_pred = model(blocks, batch_inputs)
@@ -202,26 +187,19 @@ def run(args, device, data):
             optimizer.step()
 
             iter_tput.append(len(seeds) / (time.time() - tic_step))
-            '''
-            if step % args.log_every == 0:
-                acc = compute_acc(batch_pred, batch_labels)
-                gpu_mem_alloc = th.cuda.max_memory_allocated() / 1000000 if th.cuda.is_available() else 0
-                print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MiB'.format(
-                    epoch, step, loss.item(), acc.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
-            '''
 
         toc = time.time()
         print('Epoch Time(s): {:.4f}'.format(toc - tic))
         if epoch >= 5:
             avg += toc - tic
         if epoch % args.eval_every == 0 and epoch != 0:
-            eval_acc = evaluate(model, g, g.ndata['features'], labels, val_mask, args.batch_size, device)
+            eval_acc = evaluate(model, val_g, val_g.ndata['features'], val_g.ndata['labels'], val_nid, args.batch_size, device)
             print('Eval Acc {:.4f}'.format(eval_acc))
 
     print('Avg epoch time: {}'.format(avg / (epoch - 4)))
 
 if __name__ == '__main__':
-    argparser = argparse.ArgumentParser("multi-gpu training")
+    argparser = argparse.ArgumentParser("")
     argparser.add_argument('--gpu', type=int, default=0,
         help="GPU device ID. Use -1 for CPU training")
     argparser.add_argument('--num-epochs', type=int, default=20)
@@ -233,7 +211,7 @@ if __name__ == '__main__':
     argparser.add_argument('--eval-every', type=int, default=5)
     argparser.add_argument('--lr', type=float, default=0.003)
     argparser.add_argument('--dropout', type=float, default=0.5)
-    argparser.add_argument('--num-workers', type=int, default=0,
+    argparser.add_argument('--num-workers', type=int, default=4,
         help="Number of sampling processes. Use 0 for no extra process.")
     args = argparser.parse_args()
     
@@ -242,18 +220,14 @@ if __name__ == '__main__':
     else:
         device = th.device('cpu')
 
-    # load reddit data
-    data = RedditDataset(self_loop=True)
-    train_mask = data.train_mask
-    val_mask = data.val_mask
-    features = th.Tensor(data.features)
-    in_feats = features.shape[1]
-    labels = th.LongTensor(data.labels)
-    n_classes = data.num_labels
-    # Construct graph
-    g = dgl.graph(data.graph.all_edges())
-    g.ndata['features'] = features
+    g, n_classes = load_reddit()
+    in_feats = g.ndata['features'].shape[1]
+
+    train_g, val_g, test_g = inductive_split(g)
+    train_g.create_format_()
+    val_g.create_format_()
+    test_g.create_format_()
     # Pack data
-    data = train_mask, val_mask, in_feats, labels, n_classes, g
+    data = in_feats, n_classes, train_g, val_g, test_g
 
     run(args, device, data)
