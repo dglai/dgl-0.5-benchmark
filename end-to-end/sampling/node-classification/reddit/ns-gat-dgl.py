@@ -28,7 +28,7 @@ class NeighborSampler(object):
         blocks = []
         for fanout in self.fanouts:
             # For each seed node, sample ``fanout`` neighbors.
-            frontier = dgl.dataloading.sample_neighbors(self.g, seeds, fanout, replace=True)
+            frontier = dgl.sampling.sample_neighbors(self.g, seeds, fanout, replace=True)
             # Then we compact the frontier into a bipartite graph for message passing.
             block = dgl.to_block(frontier, seeds)
             # Obtain the seed nodes for next layer.
@@ -100,6 +100,7 @@ class GAT(nn.Module):
                 end = start + batch_size
                 batch_nodes = nodes[start:end]
                 block = dgl.to_block(dgl.in_subgraph(g, batch_nodes), batch_nodes)
+                block = block.int().to(device)
                 input_nodes = block.srcdata[dgl.NID]
 
                 h = x[input_nodes].to(device)
@@ -186,6 +187,7 @@ def run(args, device, data):
 
             # The nodes for input lies at the LHS side of the first block.
             # The nodes for output lies at the RHS side of the last block.
+            blocks = [block.int().to(device) for block in blocks]
             input_nodes = blocks[0].srcdata[dgl.NID]
             seeds = blocks[-1].dstdata[dgl.NID]
 
