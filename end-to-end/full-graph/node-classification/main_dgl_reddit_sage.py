@@ -178,7 +178,7 @@ def main(args):
         if epoch >= 3:
             t0 = time.time()
         # forward
-        with autocast(enabled=True):
+        with autocast(enabled=args.fp16):
             logits = model(features)
             loss = loss_fcn(logits[train_mask], labels[train_mask])
 
@@ -190,7 +190,7 @@ def main(args):
             dur.append(time.time() - t0)
 
         if args.eval:
-            with autocast(enabled=True):
+            with autocast(enabled=args.fp16):
                 acc = evaluate(model, features, labels, val_mask)
         else:
             acc = 0
@@ -222,6 +222,8 @@ if __name__ == '__main__':
                         help="Weight for L2 loss")
     parser.add_argument("--eval", action='store_true',
                         help='If not set, we will only do the training part.')
+    parser.add_argument("--fp16", action='store_true',
+                        help='Indicates whether training GNN with amp.')
     args = parser.parse_args()
     print(args)
 
