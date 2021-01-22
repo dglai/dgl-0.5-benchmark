@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.cuda.amp import autocast
 from dgl.data import load_data
 from dgl.utils import expand_as_pair
 
@@ -177,8 +178,9 @@ def main(args):
         if epoch >= 3:
             t0 = time.time()
         # forward
-        logits = model(features)
-        loss = loss_fcn(logits[train_mask], labels[train_mask])
+        with autocast(enabled=True):
+            logits = model(features)
+            loss = loss_fcn(logits[train_mask], labels[train_mask])
 
         optimizer.zero_grad()
         loss.backward()
@@ -188,7 +190,8 @@ def main(args):
             dur.append(time.time() - t0)
 
         if args.eval:
-            acc = evaluate(model, features, labels, val_mask)
+            with autocast(enabled=True):
+                acc = evaluate(model, features, labels, val_mask)
         else:
             acc = 0
         print("Epoch {:05d} | Time(s) {:.4f} | Loss {:.4f} | Accuracy {:.4f} | "
@@ -209,11 +212,11 @@ if __name__ == '__main__':
                         help="dropout probability")
     parser.add_argument("--lr", type=float, default=1e-2,
                         help="learning rate")
-    parser.add_argument("--epochs", type=int, default=200,
+    parser.add_argument("--epochs", type=int, default=10,
                         help="number of training epochs")
     parser.add_argument("--n-hidden", type=int, default=16,
                         help="number of hidden gcn units")
-    parser.add_argument("--aggr", type=str, choices=['sum', 'mean'], default='sum',
+    parser.add_argument("--aggr", type=str, choices=['sum', 'mean'], default='mean',
                         help='Aggregation for messages')
     parser.add_argument("--weight-decay", type=float, default=5e-4,
                         help="Weight for L2 loss")
