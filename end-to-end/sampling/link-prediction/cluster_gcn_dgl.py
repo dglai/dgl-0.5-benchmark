@@ -243,7 +243,7 @@ def main():
         g_data.ndata[k] = dataset[0].ndata[k]
     print(g_data.number_of_nodes(), g_data.number_of_edges())
 
-    g_data.create_format_()
+    g_data.create_formats_()
 
     cluster_dataset = ClusterIterDataset(args.dataset, g_data, args.num_partitions, use_pp=False)
     cluster_iterator = DataLoader(cluster_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers , collate_fn=partial(subgraph_collate_fn, g_data, negs=args.negs))

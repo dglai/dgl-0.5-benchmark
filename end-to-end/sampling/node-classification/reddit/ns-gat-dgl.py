@@ -224,9 +224,9 @@ if __name__ == '__main__':
     in_feats = g.ndata['features'].shape[1]
 
     train_g, val_g, test_g = inductive_split(g)
-    train_g.create_format_()
-    val_g.create_format_()
-    test_g.create_format_()
+    train_g.create_formats_()
+    val_g.create_formats_()
+    test_g.create_formats_()
     # Pack data
     data = in_feats, n_classes, train_g, val_g, test_g
 
