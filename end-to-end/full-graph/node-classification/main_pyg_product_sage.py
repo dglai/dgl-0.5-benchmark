@@ -1,14 +1,15 @@
 import argparse
-import dgl
-import dgl.function as fn
 import numpy as np
 import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dgl.utils import expand_as_pair
-from ogb.nodeproppred import DglNodePropPredDataset, Evaluator
+from ogb.nodeproppred import PygNodePropPredDataset, Evaluator
+from torch.nn import Parameter
+from torch_sparse import SparseTensor
+from torch_geometric.utils import to_undirected
+from torch_geometric.nn.inits import glorot, zeros
 
 from utils import Logger
 
@@ -18,52 +19,25 @@ class SAGEConv(nn.Module):
                  out_feats):
         super(SAGEConv, self).__init__()
 
-        self._in_src_feats, self._in_dst_feats = expand_as_pair(in_feats)
-        self._out_feats = out_feats
-        self.fc_self = nn.Linear(self._in_dst_feats, out_feats, bias=False)
-        self.fc_neigh = nn.Linear(self._in_src_feats, out_feats)
+        self.in_feats = in_feats
+        self.out_feats = out_feats
+
+        self.weight = Parameter(torch.Tensor(in_feats, out_feats))
+        self.root_weight = Parameter(torch.Tensor(in_feats, out_feats))
+        self.bias = Parameter(torch.Tensor(out_feats))
+
         self.reset_parameters()
 
     def reset_parameters(self):
-        """Reinitialize learnable parameters."""
-        gain = nn.init.calculate_gain('relu')
-        nn.init.xavier_uniform_(self.fc_self.weight, gain=gain)
-        nn.init.xavier_uniform_(self.fc_neigh.weight, gain=gain)
+        glorot(self.weight)
+        glorot(self.root_weight)
+        zeros(self.bias)
 
-    def forward(self, graph, feat):
-        r"""Compute GraphSAGE layer.
+    def forward(self, x, adj):
+        out = adj.matmul(x, reduce="mean") @ self.weight
+        out = out + x @ self.root_weight + self.bias
+        return out
 
-        Parameters
-        ----------
-        graph : DGLGraph
-            The graph.
-        feat : torch.Tensor or pair of torch.Tensor
-            If a torch.Tensor is given, the input feature of shape :math:`(N, D_{in})` where
-            :math:`D_{in}` is size of input feature, :math:`N` is the number of nodes.
-            If a pair of torch.Tensor is given, the pair must contain two tensors of shape
-            :math:`(N_{in}, D_{in_{src}})` and :math:`(N_{out}, D_{in_{dst}})`.
-
-        Returns
-        -------
-        torch.Tensor
-            The output feature of shape :math:`(N, D_{out})` where :math:`D_{out}`
-            is size of output feature.
-        """
-        graph = graph.local_var()
-
-        if isinstance(feat, tuple):
-            feat_src, feat_dst = feat
-        else:
-            feat_src = feat_dst = feat
-
-        h_self = feat_dst
-
-        graph.srcdata['h'] = feat_src
-        graph.update_all(fn.copy_src('h', 'm'), fn.mean('m', 'neigh'))
-        h_neigh = graph.dstdata['neigh']
-        rst = self.fc_self(h_self) + self.fc_neigh(h_neigh)
-
-        return rst
 
 class GraphSAGE(nn.Module):
     def __init__(self,
@@ -75,7 +49,6 @@ class GraphSAGE(nn.Module):
         super(GraphSAGE, self).__init__()
 
         self.layers = nn.ModuleList()
-        self.bns = nn.ModuleList()
         # input layer
         self.layers.append(SAGEConv(in_feats, hidden_feats))
         # hidden layers
@@ -89,20 +62,20 @@ class GraphSAGE(nn.Module):
         for layer in self.layers:
             layer.reset_parameters()
 
-    def forward(self, g, x):
+    def forward(self, x, adj):
         for i, layer in enumerate(self.layers[:-1]):
-            x = layer(g, x)
+            x = layer(x, adj)
             x = F.relu(x)
             x = self.dropout(x)
-        x = self.layers[-1](g, x)
+        x = self.layers[-1](x, adj)
 
         return x.log_softmax(dim=-1)
 
-def train(model, g, feats, y_true, train_idx, optimizer):
+def train(model, x, adj, y_true, train_idx, optimizer):
     model.train()
 
     optimizer.zero_grad()
-    out = model(g, feats)[train_idx]
+    out = model(x, adj)[train_idx]
     loss = F.nll_loss(out, y_true.squeeze(1)[train_idx])
     loss.backward()
     optimizer.step()
@@ -110,10 +83,10 @@ def train(model, g, feats, y_true, train_idx, optimizer):
     return loss.item()
 
 @torch.no_grad()
-def test(model, g, feats, y_true, split_idx, evaluator):
+def test(model, x, adj, y_true, split_idx, evaluator):
     model.eval()
 
-    out = model(g, feats)
+    out = model(x, adj)
     y_pred = out.argmax(dim=-1, keepdim=True)
 
     train_acc = evaluator.eval({
@@ -149,17 +122,18 @@ def main():
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    dataset = DglNodePropPredDataset(name='ogbn-products')
+    dataset = PygNodePropPredDataset(name='ogbn-products')
     split_idx = dataset.get_idx_split()
 
-    g, labels = dataset[0]
-    feats = g.ndata['feat']
-    #g = dgl.to_bidirected(g)
-    g = g.int().formats(['csr', 'csc']).to(device)
-    feats, labels = feats.to(device), labels.to(device)
+    data = dataset[0]
+    edge_index = data.edge_index.to(device)
+    edge_index = to_undirected(edge_index, data.num_nodes)
+    adj = SparseTensor(row=edge_index[0], col=edge_index[1])
+
+    x, y_true = data.x.to(device), data.y.to(device)
     train_idx = split_idx['train'].to(device)
 
-    model = GraphSAGE(in_feats=feats.size(-1),
+    model = GraphSAGE(in_feats=data.x.size(-1),
                       hidden_feats=args.hidden_channels,
                       out_feats=dataset.num_classes,
                       num_layers=args.num_layers,
@@ -174,14 +148,14 @@ def main():
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         for epoch in range(1, 1 + args.epochs):
             t0 = time.time()
-            loss = train(model, g, feats, labels, train_idx, optimizer)
+            loss = train(model, x, adj, y_true, train_idx, optimizer)
             if epoch >= 3:
                 dur.append(time.time() - t0)
                 print('Training time/epoch {}'.format(np.mean(dur)))
             if not args.eval:
                 continue
 
-            result = test(model, g, feats, labels, split_idx, evaluator)
+            result = test(model, x, adj, y_true, split_idx, evaluator)
             logger.add_result(run, result)
 
             if epoch % args.log_steps == 0:
@@ -199,5 +173,5 @@ def main():
         logger.print_statistics()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
