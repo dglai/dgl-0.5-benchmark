@@ -90,10 +90,8 @@ class GATConv(MessagePassing):
         if self.activation is not None:
             out = self.activation(out)
 
-        if self.concat:
-            out = out.view(-1, self._num_heads * self._out_feats)
-        else:
-            out = out.mean(dim=1)
+        if not self.concat:
+            out = out.view(-1, self._num_heads, self._out_feats).mean(dim=1)
 
         return out
 
@@ -104,12 +102,13 @@ class GATConv(MessagePassing):
 
         alpha = (x_i * self.att_i).sum(-1) + (x_j * self.att_j).sum(-1)
         alpha = F.leaky_relu(alpha, self.negative_slope)
-        alpha = softmax(alpha, edge_index_i, size_i)
+        alpha = softmax(alpha, edge_index_i, num_nodes=size_i)
 
         # Sample attention coefficients stochastically.
         alpha = self.dropout(alpha)
 
-        return x_j * alpha.view(-1, self._num_heads, 1)
+        rst = x_j * alpha.view(-1, self._num_heads, 1)
+        return rst.view(-1, self._num_heads * self._out_feats)
 
 class GAT(nn.Module):
     def __init__(self,

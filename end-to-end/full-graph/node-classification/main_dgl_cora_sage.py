@@ -165,7 +165,7 @@ def main(args):
     # Remove duplicate edges
     # In PyG, this is a default pre-processing step for Reddit, see
     # https://github.com/rusty1s/pytorch_geometric/blob/master/torch_geometric/datasets/reddit.py#L58
-    g = data.graph
+    g = dgl.from_networkx(data.graph)
     g = g.int().to(device)
 
     # create GraphSAGE model
@@ -216,7 +216,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GraphSAGE')
-    parser.add_argument("--dataset", type=str, default='reddit')
+    parser.add_argument("--dataset", type=str, default='cora')
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--dropout", type=float, default=0.5,
                         help="dropout probability")

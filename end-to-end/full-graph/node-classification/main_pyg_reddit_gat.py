@@ -11,6 +11,8 @@ from torch_geometric.nn import MessagePassing
 from torch_geometric.nn.inits import glorot, zeros
 from torch_geometric.utils import remove_self_loops, add_self_loops, softmax
 
+from utils import Logger
+
 class GATConv(MessagePassing):
     r"""The graph attentional operator from the `"Graph Attention Networks"
     <https://arxiv.org/abs/1710.10903>`_ paper
@@ -89,10 +91,8 @@ class GATConv(MessagePassing):
         if self.activation is not None:
             out = self.activation(out)
 
-        if self.concat:
-            out = out.view(-1, self._num_heads * self._out_feats)
-        else:
-            out = out.mean(dim=1)
+        if not self.concat:
+            out = out.view(-1, self._num_heads, self._out_feats).mean(dim=1)
 
         return out
 
@@ -103,12 +103,13 @@ class GATConv(MessagePassing):
 
         alpha = (x_i * self.att_i).sum(-1) + (x_j * self.att_j).sum(-1)
         alpha = F.leaky_relu(alpha, self.negative_slope)
-        alpha = softmax(alpha, edge_index_i, size_i)
+        alpha = softmax(alpha, edge_index_i, num_nodes=size_i)
 
         # Sample attention coefficients stochastically.
         alpha = self.dropout(alpha)
 
-        return x_j * alpha.view(-1, self._num_heads, 1)
+        rst = x_j * alpha.view(-1, self._num_heads, 1)
+        return rst.view(-1, self._num_heads * self._out_feats)
 
 class GAT(nn.Module):
     def __init__(self,
@@ -158,28 +159,37 @@ class GAT(nn.Module):
             x = self.gat_layers[l](x, adj)
         return x
 
-def evaluate(model, adj, features, labels, mask):
+def calc_acc(logits, labels, mask):
+    logits = logits[mask]
+    labels = labels[mask]
+    _, indices = torch.max(logits, dim=1)
+    correct = torch.sum(indices == labels)
+    return correct.item() * 1.0 / len(labels)
+
+def evaluate(model, features, adj, labels, train_mask, val_mask, test_mask):
     model.eval()
     with torch.no_grad():
         logits = model(features, adj)
-        logits = logits[mask]
-        labels = labels[mask]
-        _, indices = torch.max(logits, dim=1)
-        correct = torch.sum(indices == labels)
-        return correct.item() * 1.0 / len(labels)
+        train_acc = calc_acc(logits, labels, train_mask)
+        val_acc = calc_acc(logits, labels, val_mask)
+        test_acc = calc_acc(logits, labels, test_mask)
+        return train_acc, val_acc, test_acc
 
 def main(args):
-    path = osp.join('..', 'data', 'Reddit')
+    device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
+    device = torch.device(device)
+
+    path = osp.join('dataset', 'Reddit')
     dataset = Reddit(path)
     data = dataset[0]
 
-    features = data.x
-    labels = data.y
-    train_mask = torch.BoolTensor(data.train_mask)
-    val_mask = torch.BoolTensor(data.val_mask)
-    test_mask = torch.BoolTensor(data.test_mask)
+    features = data.x.to(device)
+    labels = data.y.to(device)
+    train_mask = torch.BoolTensor(data.train_mask).to(device)
+    val_mask = torch.BoolTensor(data.val_mask).to(device)
+    test_mask = torch.BoolTensor(data.test_mask).to(device)
 
-    edge_index = data.edge_index
+    edge_index = data.edge_index.to(device)
     edge_index, _ = remove_self_loops(edge_index)
     edge_index, _ = add_self_loops(edge_index, num_nodes=features.size(0))
 
@@ -188,44 +198,49 @@ def main(args):
                 num_hidden=args.num_hidden,
                 num_classes=dataset.num_classes,
                 heads=[1, 1, 1],
-                dropout=args.dropout)
+                dropout=args.dropout).to(device)
 
     loss_fcn = nn.CrossEntropyLoss()
 
-    # use optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
+    logger = Logger(args.runs, args)
     dur = []
-    for epoch in range(1, 1 + args.epochs):
-        model.train()
-        if epoch >= 3:
-            t0 = time.time()
-        # forward
-        logits = model(features, edge_index)
-        loss = loss_fcn(logits[train_mask], labels[train_mask])
+    for run in range(args.runs):
+        model.reset_parameters()
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        for epoch in range(1, 1 + args.epochs):
+            model.train()
+            if epoch >= 3:
+                t0 = time.time()
+            # forward
+            logits = model(features, edge_index)
+            loss = loss_fcn(logits[train_mask], labels[train_mask])
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        if epoch >= 3:
-            dur.append(time.time() - t0)
-            print('Training time/epoch {}'.format(np.mean(dur)))
+            if epoch >= 3:
+                dur.append(time.time() - t0)
+                print('Training time/epoch {}'.format(np.mean(dur)))
+
+            if not args.eval:
+                continue
+
+            train_acc, val_acc, test_acc = evaluate(model, features, edge_index, labels, train_mask, val_mask, test_mask)
+            logger.add_result(run, (train_acc, val_acc, test_acc))
+
+            print("Run {:02d} | Epoch {:05d} | Loss {:.4f} | Train {:.4f} | Val {:.4f} | Test {:.4f}".format(run, epoch, loss.item(), train_acc, val_acc, test_acc))
 
         if args.eval:
-            acc = evaluate(model, edge_index, features, labels, val_mask)
-        else:
-            acc = 0
-        print("Epoch {:05d} | Time(s) {:.4f} | Loss {:.4f} | Accuracy {:.4f} ".format(
-            epoch, np.mean(dur), loss.item(), acc))
+            logger.print_statistics(run)
 
     if args.eval:
-        print()
-        acc = evaluate(model, edge_index, features, labels, test_mask)
-        print("Test Accuracy {:.4f}".format(acc))
+        logger.print_statistics()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAT')
+    parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--num-layers", type=int, default=3,
                         help="number of hidden layers")
     parser.add_argument("--lr", type=float, default=0.0029739421726400865,
@@ -239,6 +254,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=500)
     parser.add_argument("--eval", action='store_true',
                         help='If not set, we will only do the training part.')
+    parser.add_argument("--runs", type=int, default=10)
     args = parser.parse_args()
     print(args)
 

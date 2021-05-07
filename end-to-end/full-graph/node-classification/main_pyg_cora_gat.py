@@ -8,72 +8,57 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Parameter
 from torch_sparse import SparseTensor
-from torch_geometric.datasets import Reddit
+from torch_geometric.nn import MessagePassing, GATConv
+from torch_geometric.datasets import Planetoid
 from torch_geometric.nn.inits import glorot, zeros
+from torch_geometric.utils import remove_self_loops, add_self_loops, softmax
+import torch_geometric.transforms as T
 
 from utils import Logger
 
-class SAGEConv(nn.Module):
+class GAT(nn.Module):
     def __init__(self,
+                 num_layers,
                  in_feats,
-                 out_feats,
-                 aggr,
-                 feat_drop=0.,
-                 activation=None):
-        super(SAGEConv, self).__init__()
+                 num_hidden,
+                 num_classes,
+                 heads,
+                 activation=F.elu,
+                 dropout=0.):
+        super(GAT, self).__init__()
 
-        self._in_feats = in_feats
-        self._out_feats = out_feats
-        self._aggr = aggr
-        self.feat_drop = nn.Dropout(feat_drop)
+        self.num_layers = num_layers
+        self.gat_layers = nn.ModuleList()
+        self.gat_layers.append(GATConv(in_feats,
+                                       num_hidden,
+                                       heads=heads[0],
+                                       dropout=0.))
+
+        # hidden layers
+        for l in range(num_layers - 2):
+            # due to multi-head, the in_feats = num_hidden * num_heads
+            self.gat_layers.append(GATConv(num_hidden * heads[l],
+                                           num_hidden,
+                                           heads=heads[l + 1],
+                                           dropout=dropout))
+        # output projection
+        self.gat_layers.append(GATConv(num_hidden * heads[-2],
+                                       num_classes,
+                                       heads=heads[-1],
+                                       concat=False,
+                                       dropout=dropout))
         self.activation = activation
 
-        self.weight = Parameter(torch.Tensor(in_feats, out_feats))
-        self.root_weight = Parameter(torch.Tensor(in_feats, out_feats))
-        self.bias = Parameter(torch.Tensor(out_feats))
-
-        self.reset_parameters()
-
     def reset_parameters(self):
-        glorot(self.weight)
-        glorot(self.root_weight)
-        zeros(self.bias)
-
-    def forward(self, x, adj):
-        x = self.feat_drop(x)
-        if self._aggr == 'sum':
-            out = adj.matmul(x) @ self.weight
-        elif self._aggr == 'mean':
-            out = adj.matmul(x, reduce="mean") @ self.weight
-        else:
-            return ValueError("Expect aggregation to be 'sum' or 'mean', got {}".format(self._aggr))
-        out = out + x @ self.root_weight + self.bias
-        if self.activation is not None:
-            out = self.activation(out)
-        return out
-
-class GraphSAGE(nn.Module):
-    def __init__(self,
-                 in_feats,
-                 n_hidden,
-                 n_classes,
-                 aggr,
-                 activation=F.relu,
-                 dropout=0.):
-        super(GraphSAGE, self).__init__()
-        self.layers = nn.ModuleList()
-        self.layers.append(SAGEConv(in_feats, n_hidden, aggr, activation=activation))
-        self.layers.append(SAGEConv(n_hidden, n_classes, aggr, feat_drop=dropout, activation=None))
-
-    def reset_parameters(self):
-        for layer in self.layers:
+        for layer in self.gat_layers:
             layer.reset_parameters()
 
-    def forward(self, x, edge_index):
-        h = x
-        for layer in self.layers:
-            h = layer(h, edge_index)
-        return h
+    def forward(self, x, adj):
+        for l in range(self.num_layers):
+            x = self.gat_layers[l](x, adj)
+            if l != self.num_layers - 1:
+                x = self.activation(x)
+        return x
 
 def calc_acc(logits, labels, mask):
     logits = logits[mask]
@@ -95,8 +80,8 @@ def main(args):
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    path = osp.join('dataset', 'Reddit')
-    dataset = Reddit(path)
+    path = osp.join('dataset', 'Cora')
+    dataset = Planetoid(path, 'Cora', transform=T.NormalizeFeatures())
     data = dataset[0]
 
     features = data.x.to(device)
@@ -107,12 +92,13 @@ def main(args):
     val_mask = torch.BoolTensor(data.val_mask).to(device)
     test_mask = torch.BoolTensor(data.test_mask).to(device)
 
-    model = GraphSAGE(dataset.num_features,
-                      args.n_hidden,
-                      dataset.num_classes,
-                      args.aggr,
-                      F.relu,
-                      args.dropout).to(device)
+    model = GAT(num_layers=args.num_layers,
+                in_feats=features.size(-1),
+                num_hidden=args.num_hidden,
+                num_classes=dataset.num_classes,
+                heads=[8, 8, 1],
+                dropout=args.dropout).to(device)
+
 
     loss_fcn = nn.CrossEntropyLoss()
 
@@ -152,22 +138,21 @@ def main(args):
         logger.print_statistics()
 
 
-            
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='GraphSAGE')
+    parser = argparse.ArgumentParser(description='GAT')
+    parser.add_argument("--dataset", type=str, default='cora')
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--dropout", type=float, default=0.5,
-                        help="dropout probability")
-    parser.add_argument("--lr", type=float, default=1e-2,
+    parser.add_argument("--num-layers", type=int, default=3,
+                        help="number of hidden layers")
+    parser.add_argument("--lr", type=float, default=0.005,
                         help="learning rate")
-    parser.add_argument("--epochs", type=int, default=200,
-                        help="number of training epochs")
-    parser.add_argument("--n-hidden", type=int, default=16,
-                        help="number of hidden gcn units")
-    parser.add_argument("--aggr", type=str, choices=['sum', 'mean'], default='mean',
-                        help='Aggregation for messages')
-    parser.add_argument("--weight-decay", type=float, default=5e-4,
-                        help="Weight for L2 loss")
+    parser.add_argument('--weight-decay', type=float, default=5e-4,
+                        help="weight decay")
+    parser.add_argument("--num-hidden", type=int, default=8,
+                        help="number of hidden units")
+    parser.add_argument("--dropout", type=float, default=.6,
+                        help="Dropout to use")
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument("--eval", action='store_true',
                         help='If not set, we will only do the training part.')
     parser.add_argument("--runs", type=int, default=10)

@@ -1,19 +1,16 @@
-"""
-Inductive Representation Learning on Large Graphs
-Paper: http://papers.nips.cc/paper/6703-inductive-representation-learning-on-large-graphs.pdf
-Code: https://github.com/williamleif/graphsage-simple
-Simple reference implementation of GraphSAGE.
-"""
+import os.path as osp
+
 import argparse
-import dgl
-import dgl.function as fn
-import time
 import numpy as np
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dgl.data import load_data
-from dgl.utils import expand_as_pair
+from torch.nn import Parameter
+from torch_sparse import SparseTensor
+from torch_geometric.datasets import Planetoid
+from torch_geometric.nn.inits import glorot, zeros
+import torch_geometric.transforms as T
 
 from utils import Logger
 
@@ -26,68 +23,38 @@ class SAGEConv(nn.Module):
                  activation=None):
         super(SAGEConv, self).__init__()
 
-        self._in_src_feats, self._in_dst_feats = expand_as_pair(in_feats)
+        self._in_feats = in_feats
         self._out_feats = out_feats
         self._aggr = aggr
         self.feat_drop = nn.Dropout(feat_drop)
         self.activation = activation
-        self.fc_self = nn.Linear(self._in_dst_feats, out_feats, bias=False)
-        self.fc_neigh = nn.Linear(self._in_src_feats, out_feats)
+
+        self.weight = Parameter(torch.Tensor(in_feats, out_feats))
+        self.root_weight = Parameter(torch.Tensor(in_feats, out_feats))
+        self.bias = Parameter(torch.Tensor(out_feats))
+
         self.reset_parameters()
 
     def reset_parameters(self):
-        """Reinitialize learnable parameters."""
-        gain = nn.init.calculate_gain('relu')
-        nn.init.xavier_uniform_(self.fc_self.weight, gain=gain)
-        nn.init.xavier_uniform_(self.fc_neigh.weight, gain=gain)
+        glorot(self.weight)
+        glorot(self.root_weight)
+        zeros(self.bias)
 
-    def forward(self, graph, feat):
-        r"""Compute GraphSAGE layer.
-
-        Parameters
-        ----------
-        graph : DGLGraph
-            The graph.
-        feat : torch.Tensor or pair of torch.Tensor
-            If a torch.Tensor is given, the input feature of shape :math:`(N, D_{in})` where
-            :math:`D_{in}` is size of input feature, :math:`N` is the number of nodes.
-            If a pair of torch.Tensor is given, the pair must contain two tensors of shape
-            :math:`(N_{in}, D_{in_{src}})` and :math:`(N_{out}, D_{in_{dst}})`.
-
-        Returns
-        -------
-        torch.Tensor
-            The output feature of shape :math:`(N, D_{out})` where :math:`D_{out}`
-            is size of output feature.
-        """
-        graph = graph.local_var()
-
-        if isinstance(feat, tuple):
-            feat_src = self.feat_drop(feat[0])
-            feat_dst = self.feat_drop(feat[1])
-        else:
-            feat_src = feat_dst = self.feat_drop(feat)
-
-        h_self = feat_dst
-
-        graph.srcdata['h'] = feat_src
+    def forward(self, x, adj):
+        x = self.feat_drop(x)
         if self._aggr == 'sum':
-            graph.update_all(fn.copy_src('h', 'm'), fn.sum('m', 'neigh'))
+            out = adj.matmul(x) @ self.weight
         elif self._aggr == 'mean':
-            graph.update_all(fn.copy_src('h', 'm'), fn.mean('m', 'neigh'))
+            out = adj.matmul(x, reduce="mean") @ self.weight
         else:
             return ValueError("Expect aggregation to be 'sum' or 'mean', got {}".format(self._aggr))
-        h_neigh = graph.dstdata['neigh']
-        rst = self.fc_self(h_self) + self.fc_neigh(h_neigh)
-
-        # activation
+        out = out + x @ self.root_weight + self.bias
         if self.activation is not None:
-            rst = self.activation(rst)
-        return rst
+            out = self.activation(out)
+        return out
 
 class GraphSAGE(nn.Module):
     def __init__(self,
-                 g,
                  in_feats,
                  n_hidden,
                  n_classes,
@@ -96,7 +63,6 @@ class GraphSAGE(nn.Module):
                  dropout=0.):
         super(GraphSAGE, self).__init__()
         self.layers = nn.ModuleList()
-        self.g = g
         self.layers.append(SAGEConv(in_feats, n_hidden, aggr, activation=activation))
         self.layers.append(SAGEConv(n_hidden, n_classes, aggr, feat_drop=dropout, activation=None))
 
@@ -104,10 +70,10 @@ class GraphSAGE(nn.Module):
         for layer in self.layers:
             layer.reset_parameters()
 
-    def forward(self, features):
-        h = features
+    def forward(self, x, edge_index):
+        h = x
         for layer in self.layers:
-            h = layer(self.g, h)
+            h = layer(h, edge_index)
         return h
 
 def calc_acc(logits, labels, mask):
@@ -117,62 +83,34 @@ def calc_acc(logits, labels, mask):
     correct = torch.sum(indices == labels)
     return correct.item() * 1.0 / len(labels)
 
-def evaluate(model, features, labels, train_mask, val_mask, test_mask):
+def evaluate(model, features, adj, labels, train_mask, val_mask, test_mask):
     model.eval()
     with torch.no_grad():
-        logits = model(features)
+        logits = model(features, adj)
         train_acc = calc_acc(logits, labels, train_mask)
         val_acc = calc_acc(logits, labels, val_mask)
         test_acc = calc_acc(logits, labels, test_mask)
         return train_acc, val_acc, test_acc
 
 def main(args):
-    # load and preprocess dataset
-    data = load_data(args)
-    features = torch.FloatTensor(data.features)
-    labels = torch.LongTensor(data.labels)
-    if hasattr(torch, 'BoolTensor'):
-        train_mask = torch.BoolTensor(data.train_mask)
-        val_mask = torch.BoolTensor(data.val_mask)
-        test_mask = torch.BoolTensor(data.test_mask)
-    else:
-        train_mask = torch.ByteTensor(data.train_mask)
-        val_mask = torch.ByteTensor(data.val_mask)
-        test_mask = torch.ByteTensor(data.test_mask)
-    in_feats = features.shape[1]
-    n_classes = data.num_labels
-    n_edges = data.graph.number_of_edges()
-    print("""----Data statistics------'
-      #Edges %d
-      #Classes %d
-      #Train samples %d
-      #Val samples %d
-      #Test samples %d""" %
-          (n_edges, n_classes,
-           train_mask.int().sum().item(),
-           val_mask.int().sum().item(),
-           test_mask.int().sum().item()))
-
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    features = features.to(device)
-    labels = labels.to(device)
-    train_mask = train_mask.to(device)
-    val_mask = val_mask.to(device)
-    test_mask = test_mask.to(device)
+    path = osp.join('dataset', 'Cora')
+    dataset = Planetoid(path, 'Cora', transform=T.NormalizeFeatures())
+    data = dataset[0]
 
-    # Remove duplicate edges
-    # In PyG, this is a default pre-processing step for Reddit, see
-    # https://github.com/rusty1s/pytorch_geometric/blob/master/torch_geometric/datasets/reddit.py#L58
-    g = data.graph
-    g = g.int().to(device)
+    features = data.x.to(device)
+    labels = data.y.to(device)
+    edge_index = data.edge_index.to(device)
+    adj = SparseTensor(row=edge_index[0], col=edge_index[1])
+    train_mask = torch.BoolTensor(data.train_mask).to(device)
+    val_mask = torch.BoolTensor(data.val_mask).to(device)
+    test_mask = torch.BoolTensor(data.test_mask).to(device)
 
-    # create GraphSAGE model
-    model = GraphSAGE(g,
-                      in_feats,
+    model = GraphSAGE(dataset.num_features,
                       args.n_hidden,
-                      n_classes,
+                      dataset.num_classes,
                       args.aggr,
                       F.relu,
                       args.dropout).to(device)
@@ -184,12 +122,12 @@ def main(args):
     for run in range(args.runs):
         model.reset_parameters()
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        for epoch in range(args.epochs):
+        for epoch in range(1, args.epochs + 1):
             model.train()
             if epoch >= 3:
                 t0 = time.time()
             # forward
-            logits = model(features)
+            logits = model(features, adj)
             loss = loss_fcn(logits[train_mask], labels[train_mask])
 
             optimizer.zero_grad()
@@ -203,7 +141,7 @@ def main(args):
             if not args.eval:
                 continue
 
-            train_acc, val_acc, test_acc = evaluate(model, features, labels, train_mask, val_mask, test_mask)
+            train_acc, val_acc, test_acc = evaluate(model, features, adj, labels, train_mask, val_mask, test_mask)
             logger.add_result(run, (train_acc, val_acc, test_acc))
 
             print("Run {:02d} | Epoch {:05d} | Loss {:.4f} | Train {:.4f} | Val {:.4f} | Test {:.4f}".format(run, epoch, loss.item(), train_acc, val_acc, test_acc))
@@ -214,9 +152,10 @@ def main(args):
     if args.eval:
         logger.print_statistics()
 
+
+            
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GraphSAGE')
-    parser.add_argument("--dataset", type=str, default='reddit')
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--dropout", type=float, default=0.5,
                         help="dropout probability")

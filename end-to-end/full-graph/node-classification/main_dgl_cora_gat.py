@@ -113,7 +113,7 @@ def main(args):
     # Remove duplicate edges
     # In PyG, this is a default pre-processing step for Reddit, see
     # https://github.com/rusty1s/pytorch_geometric/blob/master/torch_geometric/datasets/reddit.py#L58
-    g = data.graph
+    g = dgl.from_networkx(data.graph)
     g = dgl.add_self_loop(g)
     g = g.int().to(device)
     features, labels = features.to(device), labels.to(device)
@@ -123,7 +123,7 @@ def main(args):
                 in_feats=in_feats,
                 num_hidden=args.num_hidden,
                 num_classes=n_classes,
-                heads=[1, 1, 1],
+                heads=[8, 8, 1],
                 feat_drop=args.dropout,
                 attn_drop=args.dropout)
     model = model.to(device)
@@ -168,19 +168,19 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAT')
-    parser.add_argument("--dataset", type=str, default='reddit')
+    parser.add_argument("--dataset", type=str, default='cora')
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--num-layers", type=int, default=3,
                         help="number of hidden layers")
-    parser.add_argument("--lr", type=float, default=0.0029739421726400865,
+    parser.add_argument("--lr", type=float, default=0.005,
                         help="learning rate")
-    parser.add_argument('--weight-decay', type=float, default=2.4222556964495987e-05,
+    parser.add_argument('--weight-decay', type=float, default=5e-4,
                         help="weight decay")
-    parser.add_argument("--num-hidden", type=int, default=16,
+    parser.add_argument("--num-hidden", type=int, default=8,
                         help="number of hidden units")
-    parser.add_argument("--dropout", type=float, default=0.18074706609292976,
+    parser.add_argument("--dropout", type=float, default=.6,
                         help="Dropout to use")
-    parser.add_argument('--epochs', type=int, default=500)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument("--eval", action='store_true',
                         help='If not set, we will only do the training part.')
     parser.add_argument("--runs", type=int, default=10)
