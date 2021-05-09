@@ -139,7 +139,7 @@ def main():
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--log_steps', type=int, default=1)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--num_layers', type=int, default=5)
     parser.add_argument('--emb_dim', type=int, default=256)
     parser.add_argument('--dropout', type=float, default=0.5)
@@ -192,8 +192,8 @@ def main():
                 print(f'Run: {run + 1:02d}, '
                       f'Epoch: {epoch:02d}, '
                       f'Loss: {loss:.4f}, '
-                      f'Valid: {val_rocauc:.2f} '
-                      f'Test: {test_rocauc:.2f}')
+                      f'Valid: {val_rocauc:.4f} '
+                      f'Test: {test_rocauc:.4f}')
 
         if args.eval:
             logger.print_statistics(run)
