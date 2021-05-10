@@ -33,7 +33,7 @@ Graph classification
 | cora | SAGE | 0.0039 | 79.24 ± 0.93 | 0.0026 | 79.99 ± 0.49 |
 | cora | GAT | 0.012 | 80.83 ± 0.98 | 0.0109 | 80.38 ± 0.49 |
 | reddit | SAGE | 0.3627 | 94.86 ± 0.08 | 0.4037 | 94.94 ± 0.04 |
-| reddit | GAT | 0.5532 | 90.01 | OOM | OOM |
+| reddit | GAT | 0.5532 | 89.14 ± 2.42 | OOM | OOM |
 | ogbn-arxiv | SAGE | 0.0943 | 72.08 ± 0.15 | 0.0981 | 72.00 ± 0.19 |
 | ogbn-arxiv | GAT | 0.0798 | 69.53 ± 0.19 | 0.181 | 69.27 ± 0.10 |
 | ogbn-product | SAGE | 0.3436 | 75.95 ± 0.19 | OOM | OOM |
