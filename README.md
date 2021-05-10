@@ -1,12 +1,15 @@
 # GNN System Benchmark
 
-The repository hosts the benchmark code from the paper [*Deep Graph Library: A Graph-centric, Highly-performant Package for Graph Neural Networks*](https://arxiv.org/pdf/1909.01315.pdf). Since both frameworks have evolved quite drastically after the paper came out (when we evaluated evaluated DGL v0.5 against PyTorch-Geometric (PyG) v1.6), we made a checkpoint of the original benchmark code in the `0.5` branch. We add more benchmark suites to the master branch and evaluate them using the latest packages.
+The repository hosts the benchmark code from the paper [*Deep Graph Library: A Graph-centric, Highly-performant Package for Graph Neural Networks*](https://arxiv.org/pdf/1909.01315.pdf). Since both frameworks have evolved quite drastically after the paper came out (when we evaluated DGL v0.5 against PyTorch-Geometric (PyG) v1.6), we made a checkpoint of the original benchmark code in the `0.5` branch. We add more benchmark suites to the master branch and evaluate them using the latest packages.
 
 **Benchmark Packages:**
 * DGL v0.6.1
 * PyTorch Geometric (PyG) v1.7.0
 
-**Hardware:** AWS EC2 p3.2xlarge instance (one NVidia V100 GPU with 16GB GPU RAM and 8 VCPUs)
+All using PyTorch 1.8.1 and CUDA 11.1.
+
+**Hardware:**
+* AWS EC2 p3.2xlarge instance (one NVidia V100 GPU with 16GB GPU RAM and 8 VCPUs)
 
 **Metric:** Time in seconds to train one epoch
 
@@ -44,9 +47,9 @@ On `ogbn-molhiv`
 
 | Batch Size | DGL/Time(s)  | DGL/ROCAUC  | PyG/Time(s) | PyG/ROCAUC |
 |---|---|---|---|---|
-| 64 | 15.089 | 76.26 | 13.517 | 76.69 |
-| 128 | 8.666 | 76.36 | 7.274 | 76.73 |
-| 256 | 5.166 | 76.59 | 4.586 | 76.58 |
+| 64 | 15.089 | 0.7666 ± 0.0125 | 13.517 | 0.7681 ± 0.0065 |
+| 128 | 8.666 | 0.7615 ± 0.0139 | 7.274 | 0.7690 ± 0.0109 |
+| 256 | 5.166 | 0.7694 ± 0.0080 | 4.586 | 0.7756 ± 0.0106 |
 
 
 Note: OOM means *Out-Of-Memory*
