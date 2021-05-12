@@ -45,6 +45,9 @@ Graph classification
 | ogbn-arxiv | GAT | 0.0798 | 69.53 ± 0.19 | 0.181 | 69.27 ± 0.10 |
 | ogbn-product | SAGE | 0.3436 | 75.95 ± 0.19 | OOM | OOM |
 
+* Run the scripts under `end-to-end/full-graph/node-classification` with default configs to get the above results.
+* Run with the `--eval` option to get model accuracy.
+
 ## Graph classification results
 
 On `ENZYMES`
@@ -63,7 +66,13 @@ On `ogbg-molhiv`
 | 128 | 8.666 | 0.7615 ± 0.0139 | 7.274 | 0.7690 ± 0.0109 |
 | 256 | 5.166 | 0.7694 ± 0.0080 | 4.586 | 0.7756 ± 0.0106 |
 
+* Run the scripts under `end-to-end/full-graph/graph-classification` with default configs to get the above results.
+* Run with the `--eval` option to get model accuracy.
+* Run with the `--batch_size` option to set the training batch size.
+* DGL is ~10% slower on `ogbg-molhiv` majorly because the graphs have nearly 1:1 node-to-edge ratio, where PyG's scatter-gather kernel becomes slightly better than DGL's fused message passing kernels.
 
-Notes
-* 
-Note: OOM means *Out-Of-Memory*
+## Notes
+* Since the purpose is to evaluate system efficiency, we focus on matching the implementations in different frameworks instead of on getting the best model performance.
+* Both PyG and DGL provide APIs at different levels. It is not fair to compare higher-level APIs like NN modules with lower-level ones such as message passing. This benchmark suite choose lower-level APIs as the attempt to compare the best speed one can get from the frameworks.
+* We implement the PyG benchmarks using its recommended APIs whenever possible. Please create a github issue if you feel some implementation can be improved.
+* OOM means *Out-Of-Memory*
