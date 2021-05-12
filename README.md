@@ -1,6 +1,6 @@
 # GNN System Benchmark
 
-The repository hosts the benchmark code from the paper [*Deep Graph Library: A Graph-centric, Highly-performant Package for Graph Neural Networks*](https://arxiv.org/pdf/1909.01315.pdf). Since both frameworks have evolved quite drastically after the paper came out (when we evaluated DGL v0.5 against PyTorch-Geometric (PyG) v1.6), we made a checkpoint of the original benchmark code in the `0.5` branch. We add more benchmark suites to the master branch and evaluate them using the latest packages.
+The repository hosts the benchmark code from the paper [*Deep Graph Library: A Graph-centric, Highly-performant Package for Graph Neural Networks*](https://arxiv.org/pdf/1909.01315.pdf). Since both frameworks have evolved quite drastically after the paper came out (when we evaluated DGL v0.5 against PyTorch-Geometric (PyG) v1.6), we made a checkpoint of the original benchmark code in the `0.5` branch. We have added more benchmark suites to the master branch and evaluated them using the latest packages.
 
 **Benchmark Packages:**
 * DGL v0.6.1
