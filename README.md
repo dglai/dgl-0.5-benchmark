@@ -19,6 +19,7 @@ Node classification
 | Dataset | #Nodes  | #Edges  | Density (%)  | #Node features  | #Edge features  |
 |---|---|---|---|---|---|
 | cora  | 2708  |  5429 | 0.074  | 1433  |  0 |
+| pubmed | 19717 | 44338 | 0.011 | 500 | 0 |
 | reddit  | 232965  |  11606919 | 0.021  |  602 |  0 |
 | ogbn-arxiv | 169343  | 1166243 | 0.004  | 128  |  0 |
 | ogbn-product | 2449029  | 61859140  |  0.001 | 100  |  0 |
@@ -27,6 +28,7 @@ Graph classification
 
 | Dataset | #Graphs | #Nodes  | #Edges  | Density (%)  | #Node features  | #Edge features  |
 |---|---|---|---|---|---|---| 
+| ENZYMES | 600 | 32.63 | 62.14 | 5.83 | 18 | 0 |
 |ogbg-molhiv | 41127 | 25.5 | 27.5 | 4.23 | 9 | 3 |
 
 ## Node classification results
@@ -35,6 +37,8 @@ Graph classification
 |---|---|---|---|---|---|
 | cora | SAGE | 0.0039 | 79.24 ± 0.93 | 0.0026 | 79.99 ± 0.49 |
 | cora | GAT | 0.012 | 80.83 ± 0.98 | 0.0109 | 80.38 ± 0.49 |
+| pubmed | SAGE | 0.0046 | 77.29 ± 0.66 | 0.0031 |  77.12 ± 0.39 |
+| pubmed | GAT | 0.0136 | 77.11 ± 0.93 | 0.0126 | 76.80 ± 1.21 |
 | reddit | SAGE | 0.3627 | 94.86 ± 0.08 | 0.4037 | 94.94 ± 0.04 |
 | reddit | GAT | 0.5532 | 89.14 ± 2.42 | OOM | OOM |
 | ogbn-arxiv | SAGE | 0.0943 | 72.08 ± 0.15 | 0.0981 | 72.00 ± 0.19 |
@@ -43,7 +47,15 @@ Graph classification
 
 ## Graph classification results
 
-On `ogbn-molhiv`
+On `ENZYMES`
+
+| Batch Size | DGL/Time(s)  | DGL/Acc(%)  | PyG/Time(s) | PyG/Acc(%) |
+|---|---|---|---|---|
+| 64 | 0.092  | 64.50 ± 3.34 | 0.081 | 63.17 ± 3.96 |
+| 128 |  0.052 | 62.33 ± 3.62| 0.052 | 68.67 ± 6.28 |
+| 256 | 0.039 | 63.00 ± 4.83 | 0.045 | 55.00 ± 3.69 |
+
+On `ogbg-molhiv`
 
 | Batch Size | DGL/Time(s)  | DGL/ROCAUC  | PyG/Time(s) | PyG/ROCAUC |
 |---|---|---|---|---|
@@ -52,4 +64,6 @@ On `ogbn-molhiv`
 | 256 | 5.166 | 0.7694 ± 0.0080 | 4.586 | 0.7756 ± 0.0106 |
 
 
+Notes
+* 
 Note: OOM means *Out-Of-Memory*

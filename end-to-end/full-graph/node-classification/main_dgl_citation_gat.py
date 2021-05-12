@@ -168,7 +168,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAT')
-    parser.add_argument("--dataset", type=str, default='cora')
+    parser.add_argument("--dataset", type=str)
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--num-layers", type=int, default=3,
                         help="number of hidden layers")

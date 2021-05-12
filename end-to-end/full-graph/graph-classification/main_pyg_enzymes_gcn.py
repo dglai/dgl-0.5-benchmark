@@ -6,14 +6,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import dgl
-from dgl.dataloading import GraphDataLoader
-from dgl.data import LegacyTUDataset
-import dgl.function as fn
+from torch_geometric.data import DataLoader
+from torch_geometric.datasets import TUDataset
+from torch_geometric.nn import MessagePassing, global_mean_pool
+from torch_geometric.utils import degree
 
 from utils import Logger
 
-class GCNConv(nn.Module):
+cls_loss = torch.nn.BCEWithLogitsLoss()
+
+class GCNConv(MessagePassing):
     def __init__(self,
                  in_feats,
                  out_feats):
@@ -27,16 +29,22 @@ class GCNConv(nn.Module):
         gain = nn.init.calculate_gain('relu')
         nn.init.xavier_uniform_(self.fc.weight, gain=gain)
 
-    def forward(self, graph, feat):
-        graph = graph.local_var()
- 
-        x = self.fc(feat)
-        deg = graph.in_degrees().float().unsqueeze(1) + 1
+    def forward(self, x, edge_index):
+        x = self.fc(x)
+
+        row, col = edge_index
+        deg = degree(row, x.size(0), dtype = x.dtype) + 1
         deg_inv_sqrt = deg.pow(-0.5)
-        graph.ndata['h'] = x * deg_inv_sqrt
-        graph.update_all(fn.copy_u('h', 'm'), fn.sum('m', 'h'))
-        h = graph.ndata['h'] * deg_inv_sqrt
-        return h
+
+        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
+
+        return self.propagate(edge_index, x=x, norm=norm)
+
+    def message(self, x_j, norm):
+        return norm.unsqueeze(1) * x_j
+
+    def update(self, aggr_out):
+        return aggr_out
 
 class GCN(nn.Module):
     def __init__(self,
@@ -47,40 +55,42 @@ class GCN(nn.Module):
                  dropout):
         super(GCN, self).__init__()
 
-        self.convs = nn.ModuleList()
+        self.layers = nn.ModuleList()
         self.bns = nn.ModuleList()
         # input layer
-        self.convs.append(GCNConv(feat_size, hidden_size))
+        self.layers.append(GCNConv(feat_size, hidden_size))
         self.bns.append(nn.BatchNorm1d(hidden_size))
-        # hidden convs
+        # hidden layers
         for _ in range(num_layers - 2):
-            self.convs.append(GCNConv(hidden_size, hidden_size))
+            self.layers.append(GCNConv(hidden_size, hidden_size))
             self.bns.append(nn.BatchNorm1d(hidden_size))
         # output layer
-        self.convs.append(GCNConv(hidden_size, hidden_size))
+        self.layers.append(GCNConv(hidden_size, hidden_size))
         self.dropout = nn.Dropout(p=dropout)
-        self.readout = dgl.nn.AvgPooling()
+        self.readout = global_mean_pool
         self.graph_fcs = nn.ModuleList()
         self.graph_fcs.append(nn.Linear(hidden_size, hidden_size))
         self.graph_fcs.append(nn.Linear(hidden_size, num_classes))
 
     def reset_parameters(self):
-        for conv in self.convs:
-            conv.reset_parameters()
+        for layer in self.layers:
+            layer.reset_parameters()
         for bn in self.bns:
             bn.reset_parameters()
         for fc in self.graph_fcs:
             gain = nn.init.calculate_gain('relu')
             nn.init.xavier_uniform_(fc.weight, gain=gain)
 
-    def forward(self, g, x):
-        for i, conv in enumerate(self.convs[:-1]):
-            x = conv(g, x)
+    def forward(self, batched_data):
+        x, edge_index, batch = batched_data.x, batched_data.edge_index, batched_data.batch
+
+        for i, layer in enumerate(self.layers[:-1]):
+            x = layer(x, edge_index)
             x = self.bns[i](x)
             x = F.relu(x)
             x = self.dropout(x)
-        x = self.convs[-1](g, x)
-        xg = self.readout(g, x)
+        x = self.layers[-1](x, edge_index)
+        xg = self.readout(x, batch)
         for i, fc in enumerate(self.graph_fcs[:-1]):
             xg = fc(xg)
             xg = F.relu(xg)
@@ -92,15 +102,13 @@ def train(model, device, train_loader, optimizer):
     model.train()
 
     train_iter = tqdm(train_loader, desc='Training')
-    for i, (batched_graph, labels) in enumerate(train_iter):
+    for i, batch in enumerate(train_iter):
         # data copy
-        batched_graph = batched_graph.to(device).formats('coo')
-        labels = labels.to(device)
+        batch = batch.to(device)
         # train
         optimizer.zero_grad()
-        x = batched_graph.ndata['feat']
-        out = model(batched_graph, x)
-        loss = F.nll_loss(out, labels)
+        out = model(batch)
+        loss = F.nll_loss(out, batch.y)
         loss.backward()
         optimizer.step()
 
@@ -115,13 +123,11 @@ def test(model, device, loader):
 
     y_true = []
     y_pred = []
-    for step, (batched_graph, labels) in enumerate(tqdm(loader, desc='Iter')):
+    for step, batch in enumerate(tqdm(loader, desc='Iter')):
         # data copy
-        batched_graph = batched_graph.to(device).int()
-        labels = labels.to(device)
-        x = batched_graph.ndata['feat']
-        pred = model(batched_graph, x)
-        y_true.append(labels.detach().cpu())
+        batch = batch.to(device)
+        pred = model(batch)
+        y_true.append(batch.y.detach().cpu())
         y_pred.append(pred.detach().cpu())
 
     y_true = torch.cat(y_true, dim=0)
@@ -132,7 +138,7 @@ def test(model, device, loader):
     return correct.item() * 1.0 / len(y_true)
 
 def main():
-    parser = argparse.ArgumentParser(description='ENZYMES')
+    parser = argparse.ArgumentParser(description='OGBN-MolHiv')
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--log_steps', type=int, default=1)
@@ -152,23 +158,16 @@ def main():
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    dataset = LegacyTUDataset('ENZYMES')
-    num_samples = len(dataset)
-    indices = np.arange(num_samples)
-    np.random.seed(42)
-    np.random.shuffle(indices)
+    dataset = TUDataset('dataset', name='ENZYMES', use_node_attr=True)
+    dataset = dataset.shuffle()
 
-    train_set = dgl.data.utils.Subset(dataset, indices[:int(num_samples * 0.8)])
-    val_set = dgl.data.utils.Subset(dataset, indices[int(num_samples * 0.8):int(num_samples * 0.9)])
-    test_set = dgl.data.utils.Subset(dataset, indices[int(num_samples * 0.9):int(num_samples)])
+    train_loader = DataLoader(dataset[:len(dataset) // 10 * 8], batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    val_loader = DataLoader(dataset[len(dataset) // 10 * 8 : len(dataset) // 10 * 9], batch_size=args.eval_batch_size, shuffle=False, num_workers=0)
+    test_loader = DataLoader(dataset[len(dataset) // 10 * 9:], batch_size=args.eval_batch_size, shuffle=False, num_workers=0)
 
-    train_loader = GraphDataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    val_loader = GraphDataLoader(val_set, batch_size=args.eval_batch_size, shuffle=True, num_workers=0)
-    test_loader = GraphDataLoader(test_set, batch_size=args.eval_batch_size, shuffle=True, num_workers=0)
-
-    model = GCN(18,
+    model = GCN(dataset.num_features,
                 args.hidden_size,
-                num_classes=int(dataset.num_labels),
+                num_classes=dataset.num_classes,
                 num_layers=args.num_layers,
                 dropout=args.dropout).to(device)
 
@@ -196,8 +195,8 @@ def main():
                 print(f'Run: {run + 1:02d}, '
                       f'Epoch: {epoch:02d}, '
                       f'Loss: {loss:.4f}, '
-                      f'Valid: {val_acc * 100:.4f}% '
-                      f'Test: {test_acc * 100:.4f}%')
+                      f'Valid: {val_acc * 100:.2f}% '
+                      f'Test: {test_acc * 100:.2f}%')
 
         if args.eval:
             logger.print_statistics(run)

@@ -80,8 +80,8 @@ def main(args):
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    path = osp.join('dataset', 'Cora')
-    dataset = Planetoid(path, 'Cora', transform=T.NormalizeFeatures())
+    path = osp.join('dataset', args.dataset)
+    dataset = Planetoid(path, args.dataset, transform=T.NormalizeFeatures())
     data = dataset[0]
 
     features = data.x.to(device)
@@ -140,7 +140,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAT')
-    parser.add_argument("--dataset", type=str, default='cora')
+    parser.add_argument("--dataset", type=str)
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--num-layers", type=int, default=3,
                         help="number of hidden layers")

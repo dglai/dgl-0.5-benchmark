@@ -32,6 +32,7 @@ class GCNConv(MessagePassing):
         """Reinitialize learnable parameters."""
         gain = nn.init.calculate_gain('relu')
         nn.init.xavier_uniform_(self.fc.weight, gain=gain)
+        self.root_emb.reset_parameters()
 
     def forward(self, x, edge_index, edge_attr):
         x = self.fc(x)
