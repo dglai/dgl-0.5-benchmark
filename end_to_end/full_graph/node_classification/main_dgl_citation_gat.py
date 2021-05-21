@@ -80,7 +80,27 @@ def evaluate(model, features, labels, train_mask, val_mask, test_mask):
         test_acc = calc_acc(logits, labels, test_mask)
         return train_acc, val_acc, test_acc
 
-def main(args):
+def main():
+    parser = argparse.ArgumentParser(description='GAT')
+    parser.add_argument("--dataset", type=str)
+    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--num-layers", type=int, default=3,
+                        help="number of hidden layers")
+    parser.add_argument("--lr", type=float, default=0.005,
+                        help="learning rate")
+    parser.add_argument('--weight-decay', type=float, default=5e-4,
+                        help="weight decay")
+    parser.add_argument("--num-hidden", type=int, default=8,
+                        help="number of hidden units")
+    parser.add_argument("--dropout", type=float, default=.6,
+                        help="Dropout to use")
+    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument("--eval", action='store_true',
+                        help='If not set, we will only do the training part.')
+    parser.add_argument("--runs", type=int, default=10)
+    args = parser.parse_args()
+    print(args)
+
     # load and preprocess dataset
     data = load_data(args)
     features = torch.FloatTensor(data.features)
@@ -167,24 +187,4 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='GAT')
-    parser.add_argument("--dataset", type=str)
-    parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--num-layers", type=int, default=3,
-                        help="number of hidden layers")
-    parser.add_argument("--lr", type=float, default=0.005,
-                        help="learning rate")
-    parser.add_argument('--weight-decay', type=float, default=5e-4,
-                        help="weight decay")
-    parser.add_argument("--num-hidden", type=int, default=8,
-                        help="number of hidden units")
-    parser.add_argument("--dropout", type=float, default=.6,
-                        help="Dropout to use")
-    parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument("--eval", action='store_true',
-                        help='If not set, we will only do the training part.')
-    parser.add_argument("--runs", type=int, default=10)
-    args = parser.parse_args()
-    print(args)
-
-    main(args)
+    main()

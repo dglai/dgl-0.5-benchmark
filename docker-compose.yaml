@@ -1,0 +1,17 @@
+version: '3.5'
+
+services:
+  benchmark:
+    build:
+      context: ./docker/
+      dockerfile: build.dockerfile
+    volumes:
+      - ./:/io:delegated
+    command: ["python", "/io/end_to_end/full_graph/node_classification/generate_result.py"]
+    deploy:
+        resources:
+          reservations:
+            devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [compute, gpu, utility]
