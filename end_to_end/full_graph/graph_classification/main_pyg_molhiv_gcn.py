@@ -143,7 +143,7 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--runs', type=int, default=1)
+    parser.add_argument('--runs', type=int, default=10)
     parser.add_argument('--eval', action='store_true',
                         help='If not set, we will only do the training part.')
     parser.add_argument('--eval_batch_size', type=int, default=2048)

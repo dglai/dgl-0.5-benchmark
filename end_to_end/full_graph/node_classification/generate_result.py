@@ -8,12 +8,12 @@ import main_dgl_product_sage
 import main_dgl_proteins_rgcn_for
 import main_dgl_reddit_gat
 import main_dgl_reddit_sage
-# import main_pyg_arxiv_gat
-# import main_pyg_arxiv_sage
+import main_pyg_arxiv_gat
+import main_pyg_arxiv_sage
 import main_pyg_citation_gat
 import main_pyg_citation_sage
-# import main_pyg_product_sage
-# import main_pyg_proteins_rgcn_for
+import main_pyg_product_sage
+import main_pyg_proteins_rgcn_for
 
 
 import torch
@@ -69,14 +69,14 @@ if __name__ == "__main__":
         main_dgl_arxiv_sage.main,
         main_dgl_citation_gat.main,
         main_dgl_citation_sage.main,
-        main_dgl_product_sage.main,
+        # main_dgl_product_sage.main,
         main_dgl_proteins_rgcn_for.main,
         main_dgl_reddit_gat.main,
         main_dgl_reddit_sage.main,
-        # main_pyg_arxiv_gat.main,
-        # main_pyg_arxiv_sage.main,
-        # main_pyg_citation_gat.main,
-        # main_pyg_citation_sage.main,
+        main_pyg_arxiv_gat.main,
+        main_pyg_arxiv_sage.main,
+        main_pyg_citation_gat.main,
+        main_pyg_citation_sage.main,
         # main_pyg_product_sage.main,
         # main_pyg_proteins_rgcn_for.main,
     ]
@@ -92,17 +92,23 @@ if __name__ == "__main__":
                 print(f"Run {t.__name__} test with argv: {extra_argv}")
                 p.start()
                 p.join()
-                ret = q.get(block=False)
-                fname = list(ret.keys())[0]
-                ret[f"{fname}_{citation_dataset_name}"] = ret[fname]
-                del ret[fname]
-                ret_dict.update(ret)
+                if q.empty():
+                    print(f"Failed to run {filename} with argv: {extra_argv}")
+                else:
+                    ret = q.get(block=False)
+                    fname = list(ret.keys())[0]
+                    ret[f"{fname}_{citation_dataset_name}"] = ret[fname]
+                    del ret[fname]
+                    ret_dict.update(ret)
         else:
             p = ctx.Process(target=get_output, args=(t, q))
             p.start()
             p.join()
-            ret = q.get(block=False)
-            ret_dict.update(ret)
+            if q.empty():
+                print(f"Failed to run {filename}")
+            else:
+                ret = q.get(block=False)
+                ret_dict.update(ret)
     print(ret_dict)
     df = pd.DataFrame(ret_dict).transpose()
     print(df.to_json())
