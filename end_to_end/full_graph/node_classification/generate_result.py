@@ -48,7 +48,9 @@ def get_output(func, queue, extra_args = []):
     from tqdm import tqdm
     from functools import partialmethod
     import sys, os
-    os.symlink('/tmp/dataset/', os.path.join(os.getcwd(), 'dataset'))
+    dirpath = Path(os.path.join(os.getcwd(), 'dataset'))
+    if not dirpath.exists():
+        os.symlink('/tmp/dataset/', os.path.join(os.getcwd(), 'dataset'))
     tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)  # disable tqdm
     sys.argv = sys.argv[:1] # clear previous argv
     sys.argv.append("--eval")  # add evaluation results
