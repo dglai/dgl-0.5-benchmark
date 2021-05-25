@@ -47,7 +47,8 @@ def parse_results(output: str):
 def get_output(func, queue, extra_args = []):
     from tqdm import tqdm
     from functools import partialmethod
-    import sys
+    import sys, os
+    os.symlink('/tmp/dataset/', os.path.join(os.getcwd(), 'dataset'))
     tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)  # disable tqdm
     sys.argv = sys.argv[:1] # clear previous argv
     sys.argv.append("--eval")  # add evaluation results
@@ -69,7 +70,7 @@ if __name__ == "__main__":
         main_dgl_arxiv_sage.main,
         main_dgl_citation_gat.main,
         main_dgl_citation_sage.main,
-        # main_dgl_product_sage.main,
+        main_dgl_product_sage.main,
         main_dgl_proteins_rgcn_for.main,
         main_dgl_reddit_gat.main,
         main_dgl_reddit_sage.main,
@@ -77,8 +78,8 @@ if __name__ == "__main__":
         main_pyg_arxiv_sage.main,
         main_pyg_citation_gat.main,
         main_pyg_citation_sage.main,
-        # main_pyg_product_sage.main,
-        # main_pyg_proteins_rgcn_for.main,
+        main_pyg_product_sage.main,
+        main_pyg_proteins_rgcn_for.main,
     ]
     ret_dict = {}
     for t in test_list:
