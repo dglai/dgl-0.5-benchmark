@@ -126,8 +126,8 @@ def main():
     split_idx = dataset.get_idx_split()
 
     data = dataset[0]
-    edge_index = data.edge_index.to(device)
-    edge_index = to_undirected(edge_index, data.num_nodes)
+    edge_index = to_undirected(data.edge_index, data.num_nodes).to(device)
+    # edge_index = to_undirected(edge_index, data.num_nodes)
     adj = SparseTensor(row=edge_index[0], col=edge_index[1])
 
     x, y_true = data.x.to(device), data.y.to(device)
