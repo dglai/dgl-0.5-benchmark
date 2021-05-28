@@ -81,7 +81,7 @@ if __name__ == "__main__":
         main_pyg_citation_gat.main,
         main_pyg_citation_sage.main,
         main_pyg_product_sage.main,
-        main_pyg_proteins_rgcn_for.main,
+        # main_pyg_proteins_rgcn_for.main, # skip this one since will OOM
     ]
     ret_dict = {}
     for t in test_list:
