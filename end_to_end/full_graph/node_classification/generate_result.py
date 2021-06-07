@@ -117,3 +117,4 @@ if __name__ == "__main__":
     print(df.to_json())
     print(df.to_markdown())
     print(df)
+    df.to_csv("r.csv")
