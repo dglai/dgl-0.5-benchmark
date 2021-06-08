@@ -6,7 +6,7 @@ The repository hosts the benchmark code from the paper [*Deep Graph Library: A G
 * DGL v0.6.1
 * PyTorch Geometric (PyG) v1.7.0
 
-All using PyTorch 1.8.1 and CUDA 11.1.
+All using Python 3.7.5, PyTorch 1.8.1 and CUDA 11.1.
 
 **Hardware:**
 * AWS EC2 p3.2xlarge instance (one NVidia V100 GPU with 16GB GPU RAM and 8 VCPUs)
