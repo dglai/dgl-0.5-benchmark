@@ -140,6 +140,7 @@ def main():
     print(args)
 
     # OOM on a GPU of 16G
+    assert args.device == -1, "This example can only run on cpu"
     device = 'cpu'
     device = torch.device(device)
 

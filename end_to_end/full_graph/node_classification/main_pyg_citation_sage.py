@@ -92,7 +92,28 @@ def evaluate(model, features, adj, labels, train_mask, val_mask, test_mask):
         test_acc = calc_acc(logits, labels, test_mask)
         return train_acc, val_acc, test_acc
 
-def main(args):
+def main():
+    parser = argparse.ArgumentParser(description='GraphSAGE')
+    parser.add_argument("--dataset", type=str)
+    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--dropout", type=float, default=0.5,
+                        help="dropout probability")
+    parser.add_argument("--lr", type=float, default=1e-2,
+                        help="learning rate")
+    parser.add_argument("--epochs", type=int, default=200,
+                        help="number of training epochs")
+    parser.add_argument("--n-hidden", type=int, default=16,
+                        help="number of hidden gcn units")
+    parser.add_argument("--aggr", type=str, choices=['sum', 'mean'], default='mean',
+                        help='Aggregation for messages')
+    parser.add_argument("--weight-decay", type=float, default=5e-4,
+                        help="Weight for L2 loss")
+    parser.add_argument("--eval", action='store_true',
+                        help='If not set, we will only do the training part.')
+    parser.add_argument("--runs", type=int, default=10)
+    args = parser.parse_args()
+    print(args)
+
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
@@ -155,25 +176,4 @@ def main(args):
 
             
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='GraphSAGE')
-    parser.add_argument("--dataset", type=str)
-    parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--dropout", type=float, default=0.5,
-                        help="dropout probability")
-    parser.add_argument("--lr", type=float, default=1e-2,
-                        help="learning rate")
-    parser.add_argument("--epochs", type=int, default=200,
-                        help="number of training epochs")
-    parser.add_argument("--n-hidden", type=int, default=16,
-                        help="number of hidden gcn units")
-    parser.add_argument("--aggr", type=str, choices=['sum', 'mean'], default='mean',
-                        help='Aggregation for messages')
-    parser.add_argument("--weight-decay", type=float, default=5e-4,
-                        help="Weight for L2 loss")
-    parser.add_argument("--eval", action='store_true',
-                        help='If not set, we will only do the training part.')
-    parser.add_argument("--runs", type=int, default=10)
-    args = parser.parse_args()
-    print(args)
-
-    main(args)
+    main()

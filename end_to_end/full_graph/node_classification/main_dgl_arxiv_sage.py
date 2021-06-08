@@ -21,7 +21,7 @@ class SAGEConv(nn.Module):
         self._in_src_feats, self._in_dst_feats = expand_as_pair(in_feats)
         self._out_feats = out_feats
         self.fc_self = nn.Linear(self._in_dst_feats, out_feats, bias=False)
-        self.fc_neigh = nn.Linear(self._in_src_feats, out_feats)
+        self.fc_neigh = nn.Linear(self._in_src_feats, out_feats, bias=False)
         self.reset_parameters()
 
     def reset_parameters(self):
